@@ -1,5 +1,17 @@
 # Code Standards
 
+## Project-wide agent workflow
+
+For every code review, branch review, implementation, or bug-fix task in this repository:
+
+1. Read `.agents/agent.md`.
+2. For a review or audit, read `.agents/reviewer.md` and use `C:\Users\lchan\.agents\skills\code-review\SKILL.md`.
+3. For implementation or code changes, read `.agents/coder.md` and use `C:\Users\lchan\.agents\skills\implement\SKILL.md`.
+4. Follow this file and the relevant documents under `docs/`; report actual verification results.
+5. Write review reports as Markdown files under the ignored `.reviews/` directory.
+
+These role files are the project-wide local workflow. A user may narrow the task or choose a different review baseline, but the required skill and verification discipline still apply unless explicitly overridden.
+
 This project specifies **Ultracite** plus project-specific code standards, with **Oxlint + Oxfmt** as the recommended linting and formatting tools. Configure one agreed toolchain during Sprint 0; the current workspace contains specifications only, so these tools and commands are not installed yet.
 
 ## Core Principles
