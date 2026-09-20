@@ -11,3 +11,4 @@ test-results/
 packages/db/prisma/generated/
 .agents/
 .reviews/
+.codex/
