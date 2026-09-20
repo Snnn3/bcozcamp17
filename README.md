@@ -4,7 +4,7 @@ An online, responsive web platform that supports an onsite camp.
 
 The current confirmed delivery is intentionally limited to the registration and document-review flow. The website is online; the camp itself is onsite.
 
-This repository is an npm-workspaces TypeScript monorepo that follows the architecture in [PROJECT_SPEC.md](PROJECT_SPEC.md): separate Participant Web and Staff Web applications, a modular-monolith Fastify API, and shared packages for contracts, authentication, configuration, database access, storage, UI, and validation.
+This repository is an npm-workspaces TypeScript monorepo that follows the architecture in [PROJECT_SPEC.md](docs/PROJECT_SPEC.md): separate Participant Web and Staff Web applications, a modular-monolith Fastify API, and shared packages for contracts, authentication, configuration, database access, storage, UI, and validation.
 
 ## Repository structure
 
@@ -46,12 +46,12 @@ QR/check-in, missions, evaluation, buddy/group automation, and spin-wheel reward
 
 | Document | Purpose |
 |---|---|
-| [PROJECT_SPEC.md](PROJECT_SPEC.md) | Product scope, requirements, sprint plan, architecture, technology, and repository structure |
-| [API_SPEC.md](API_SPEC.md) | REST API contract for Sprint 1–2 |
-| [CAMP_DATABASE_SCHEMA.md](CAMP_DATABASE_SCHEMA.md) | 3NF logical database schema and integrity rules |
-| [DBDIAGRAM_SCHEMA.dbml](DBDIAGRAM_SCHEMA.dbml) | DBML import file for dbdiagram.io, limited to Sprint 0–2 |
-| [TEST_SPEC.md](TEST_SPEC.md) | Test levels, scenarios, security, responsive, and performance tests |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Formatting, coding, testing, and pull-request rules |
+| [PROJECT_SPEC.md](docs/PROJECT_SPEC.md) | Product scope, requirements, sprint plan, architecture, technology, and repository structure |
+| [API_SPEC.md](docs/API_SPEC.md) | REST API contract for Sprint 1–2 |
+| [CAMP_DATABASE_SCHEMA.md](docs/CAMP_DATABASE_SCHEMA.md) | 3NF logical database schema and integrity rules |
+| [DBDIAGRAM_SCHEMA.dbml](docs/DBDIAGRAM_SCHEMA.dbml) | DBML import file for dbdiagram.io, limited to Sprint 0–2 |
+| [TEST_SPEC.md](docs/TEST_SPEC.md) | Test levels, scenarios, security, responsive, and performance tests |
+| [CONTRIBUTING.md](docs/CONTRIBUTING.md) | Formatting, coding, testing, and pull-request rules |
 
 PROJECT_SPEC owns product behavior and decision status; API_SPEC owns the wire contract; CAMP_DATABASE_SCHEMA and DBML must agree on persistence; TEST_SPEC maps behavior to acceptance tests. Resolve conflicts by updating all affected documents together. PROJECT_SPEC sections 16–18 contain lifecycle rules, edge cases, and unresolved launch decisions.
 
@@ -85,4 +85,4 @@ npm run dev:staff
 
 The API health endpoint is available at `http://localhost:3000/api/v1/health`. Start PostgreSQL and MinIO with `docker compose -f infra/docker-compose.yml up -d` before running database migrations or seed commands.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) before adding code.
+See [CONTRIBUTING.md](docs/CONTRIBUTING.md) before adding code.

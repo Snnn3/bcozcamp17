@@ -252,7 +252,14 @@ Use a TypeScript/Node.js monorepo with a modular-monolith API. Web applications 
 ├── infra/                           # Docker/local services/deployment
 ├── scripts/
 ├── .github/workflows/               # CI
-├── CONTRIBUTING.md
+├── docs/                            # Project contracts and contributor guidance
+│   ├── API_SPEC.md
+│   ├── CAMP_DATABASE_SCHEMA.md
+│   ├── CONTEXT.md
+│   ├── CONTRIBUTING.md
+│   ├── DBDIAGRAM_SCHEMA.dbml
+│   ├── PROJECT_SPEC.md
+│   └── TEST_SPEC.md
 ├── README.md
 ├── package.json
 ├── package-lock.json

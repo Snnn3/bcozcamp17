@@ -6,7 +6,7 @@ This project specifies **Ultracite** plus project-specific code standards, with 
 
 Write code that is **accessible, performant, type-safe, and maintainable**. Favor clear intent and protect participant information throughout registration and document review.
 
-Use [CONTEXT.md](CONTEXT.md) for domain language and [CONTRIBUTING.md](CONTRIBUTING.md) for the full coding and review rules. Product behavior belongs to [PROJECT_SPEC.md](PROJECT_SPEC.md), the wire contract to [API_SPEC.md](API_SPEC.md), persistence to [CAMP_DATABASE_SCHEMA.md](CAMP_DATABASE_SCHEMA.md) and [DBDIAGRAM_SCHEMA.dbml](DBDIAGRAM_SCHEMA.dbml), and acceptance coverage to [TEST_SPEC.md](TEST_SPEC.md). Update affected contracts together when behavior changes.
+Use [CONTEXT.md](docs/CONTEXT.md) for domain language and [CONTRIBUTING.md](docs/CONTRIBUTING.md) for the full coding and review rules. Product behavior belongs to [PROJECT_SPEC.md](docs/PROJECT_SPEC.md), the wire contract to [API_SPEC.md](docs/API_SPEC.md), persistence to [CAMP_DATABASE_SCHEMA.md](docs/CAMP_DATABASE_SCHEMA.md) and [DBDIAGRAM_SCHEMA.dbml](docs/DBDIAGRAM_SCHEMA.dbml), and acceptance coverage to [TEST_SPEC.md](docs/TEST_SPEC.md). Update affected contracts together when behavior changes.
 
 ### Type Safety & Explicitness
 
