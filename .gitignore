@@ -10,3 +10,4 @@ test-results/
 *.log
 packages/db/prisma/generated/
 .agents/
+.reviews/
