@@ -1,16 +1,30 @@
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import { z } from "zod";
+
+const optionalNonEmptyString = z.preprocess(
+  (value: unknown) => (value === "" ? undefined : value),
+  z.string().min(1).optional(),
+);
+const optionalUrl = z.preprocess(
+  (value: unknown) => (value === "" ? undefined : value),
+  z.string().url().optional(),
+);
 
 const environmentInputSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().int().min(1).max(65_535).default(3_000),
   WEB_ORIGINS: z.string().default("http://localhost:5173,http://localhost:5174"),
-  DATABASE_URL: z.string().min(1).optional(),
-  SESSION_SECRET: z.string().min(32).optional(),
-  STORAGE_ENDPOINT: z.string().url().optional(),
+  DATABASE_URL: optionalNonEmptyString,
+  SESSION_SECRET: optionalNonEmptyString,
+  STORAGE_ENDPOINT: optionalUrl,
   STORAGE_REGION: z.string().min(1).default("us-east-1"),
   STORAGE_BUCKET: z.string().min(1).default("bcoz-private"),
-  STORAGE_ACCESS_KEY_ID: z.string().min(1).optional(),
-  STORAGE_SECRET_ACCESS_KEY: z.string().min(1).optional(),
+  STORAGE_ACCESS_KEY_ID: optionalNonEmptyString,
+  STORAGE_SECRET_ACCESS_KEY: optionalNonEmptyString,
+  GOOGLE_CLIENT_ID: optionalNonEmptyString,
+  GOOGLE_CLIENT_SECRET: optionalNonEmptyString,
+  GOOGLE_REDIRECT_URI: optionalUrl,
 });
 
 export const environmentSchema = environmentInputSchema.transform((input) => ({
@@ -26,9 +40,18 @@ export const environmentSchema = environmentInputSchema.transform((input) => ({
   storageBucket: input.STORAGE_BUCKET,
   storageAccessKeyId: input.STORAGE_ACCESS_KEY_ID,
   storageSecretAccessKey: input.STORAGE_SECRET_ACCESS_KEY,
+  googleClientId: input.GOOGLE_CLIENT_ID,
+  googleClientSecret: input.GOOGLE_CLIENT_SECRET,
+  googleRedirectUri: input.GOOGLE_REDIRECT_URI,
 }));
 
 export type Environment = z.infer<typeof environmentSchema>;
+
+export function loadEnvironmentFile(filePath: string = resolve(process.cwd(), ".env")): void {
+  if (existsSync(filePath)) {
+    process.loadEnvFile(filePath);
+  }
+}
 
 export function parseEnvironment(input: NodeJS.ProcessEnv = process.env): Environment {
   const environment = environmentSchema.parse(input);
@@ -44,6 +67,9 @@ export function parseEnvironment(input: NodeJS.ProcessEnv = process.env): Enviro
       ["STORAGE_ENDPOINT", environment.storageEndpoint],
       ["STORAGE_ACCESS_KEY_ID", environment.storageAccessKeyId],
       ["STORAGE_SECRET_ACCESS_KEY", environment.storageSecretAccessKey],
+      ["GOOGLE_CLIENT_ID", environment.googleClientId],
+      ["GOOGLE_CLIENT_SECRET", environment.googleClientSecret],
+      ["GOOGLE_REDIRECT_URI", environment.googleRedirectUri],
     ].filter(([, value]) => value === undefined);
 
     if (missingProductionValues.length > 0) {
@@ -54,5 +80,7 @@ export function parseEnvironment(input: NodeJS.ProcessEnv = process.env): Enviro
 
   return environment;
 }
+
+loadEnvironmentFile();
 
 export const env = parseEnvironment();

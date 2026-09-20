@@ -8,13 +8,16 @@ import {
   RouterProvider,
 } from "@tanstack/react-router";
 import { AppShell, PageHeading, StatusBanner } from "@bcoz/ui";
+import { RouteGuard } from "./auth";
 import "./styles.css";
 
 function ParticipantLayout(): ReactElement {
   return (
-    <AppShell audience="participant">
-      <Outlet />
-    </AppShell>
+    <RouteGuard audience="participant">
+      <AppShell audience="participant">
+        <Outlet />
+      </AppShell>
+    </RouteGuard>
   );
 }
 

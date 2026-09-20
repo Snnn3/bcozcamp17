@@ -311,12 +311,13 @@ model ApplicationDocument {
   updatedAt           DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(3)
   application         Application              @relation(fields: [applicationId], references: [id], onDelete: Cascade)
   documentType        DocumentType             @relation(fields: [documentTypeId], references: [id], onDelete: Restrict)
-  currentSubmission   DocumentSubmission?      @relation("CurrentSubmission", fields: [currentSubmissionId], references: [id], onDelete: SetNull)
+  currentSubmission   DocumentSubmission?      @relation("CurrentSubmission", fields: [id, currentSubmissionId], references: [applicationDocumentId, id], onDelete: SetNull)
   submissions         DocumentSubmission[]     @relation("DocumentVersions")
   reviewHistory       DocumentReviewHistory[]
   notificationLinks   NotificationDocument[]
   uploadIntents       UploadIntent[]
 
+  @@unique([id, currentSubmissionId])
   @@unique([applicationId, documentTypeId])
   @@map("application_documents")
 }
@@ -335,9 +336,10 @@ model DocumentSubmission {
   applicationDocument  ApplicationDocument    @relation("DocumentVersions", fields: [applicationDocumentId], references: [id], onDelete: Cascade)
   currentForDocument   ApplicationDocument?   @relation("CurrentSubmission")
   uploader             User                   @relation("SubmissionUploader", fields: [uploadedBy], references: [id], onDelete: Restrict)
-  reviewHistory        DocumentReviewHistory[]
+  reviewHistory        DocumentReviewHistory[] @relation("ReviewSubmission")
   resultingUploadIntent UploadIntent?         @relation("UploadIntentResult")
 
+  @@unique([applicationDocumentId, id])
   @@unique([applicationDocumentId, versionNumber])
   @@map("document_submissions")
 }
@@ -354,7 +356,7 @@ model DocumentReviewHistory {
   replacementAllowed   Boolean             @map("replacement_allowed")
   createdAt            DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
   applicationDocument  ApplicationDocument @relation(fields: [applicationDocumentId], references: [id], onDelete: Cascade)
-  submission           DocumentSubmission  @relation(fields: [submissionId], references: [id], onDelete: Restrict)
+  submission           DocumentSubmission  @relation("ReviewSubmission", fields: [applicationDocumentId, submissionId], references: [applicationDocumentId, id], onDelete: Restrict)
   reviewer             User                @relation("ReviewReviewer", fields: [reviewerId], references: [id], onDelete: Restrict)
 
   @@index([applicationDocumentId, createdAt])
@@ -442,10 +444,11 @@ model UploadIntent {
   completedAt           DateTime?          @map("completed_at") @db.Timestamptz(3)
   applicationDocument   ApplicationDocument @relation(fields: [applicationDocumentId], references: [id], onDelete: Cascade)
   uploader              User               @relation("UploadInitiator", fields: [uploadedBy], references: [id], onDelete: Restrict)
-  resultSubmission      DocumentSubmission? @relation("UploadIntentResult", fields: [resultSubmissionId], references: [id], onDelete: SetNull)
+  resultSubmission      DocumentSubmission? @relation("UploadIntentResult", fields: [applicationDocumentId, resultSubmissionId], references: [applicationDocumentId, id], onDelete: SetNull)
 
   @@index([status, expiresAt])
   @@index([uploadedBy, status])
+  @@unique([applicationDocumentId, resultSubmissionId])
   @@map("upload_intents")
 }
 

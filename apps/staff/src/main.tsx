@@ -8,13 +8,16 @@ import {
   RouterProvider,
 } from "@tanstack/react-router";
 import { AppShell, PageHeading, StatusBanner } from "@bcoz/ui";
+import { StaffRouteGuard } from "./auth";
 import "./styles.css";
 
 function StaffLayout(): ReactElement {
   return (
-    <AppShell audience="staff">
-      <Outlet />
-    </AppShell>
+    <StaffRouteGuard>
+      <AppShell audience="staff">
+        <Outlet />
+      </AppShell>
+    </StaffRouteGuard>
   );
 }
 
