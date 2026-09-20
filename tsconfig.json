@@ -1,0 +1,46 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noImplicitOverride": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "useDefineForClassFields": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "resolveJsonModule": true,
+    "jsx": "react-jsx",
+    "allowJs": false,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["node"],
+    "baseUrl": ".",
+    "paths": {
+      "@bcoz/api": ["packages/api/src/index.ts"],
+      "@bcoz/auth": ["packages/auth/src/index.ts"],
+      "@bcoz/config": ["packages/config/src/index.ts"],
+      "@bcoz/db": ["packages/db/src/index.ts"],
+      "@bcoz/storage": ["packages/storage/src/index.ts"],
+      "@bcoz/ui": ["packages/ui/src/index.tsx"],
+      "@bcoz/validation": ["packages/validation/src/index.ts"]
+    }
+  },
+  "include": [
+    "apps/**/*.ts",
+    "apps/**/*.tsx",
+    "packages/**/*.ts",
+    "packages/**/*.tsx",
+    "tests/**/*.ts",
+    "tests/**/*.tsx",
+    "*.config.ts",
+    "*.config.mjs",
+    "scripts/**/*.mjs"
+  ],
+  "exclude": ["node_modules", "dist", "coverage", "playwright-report", "test-results"]
+}
