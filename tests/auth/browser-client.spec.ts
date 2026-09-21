@@ -18,8 +18,11 @@ describe("shared browser authentication client", () => {
       },
     });
 
-    expect(session).not.toBeNull();
-    expect(canUseStaffWorkspace(session!)).toBe(true);
+    if (session === null) {
+      throw new Error("Expected a valid staff session payload");
+    }
+
+    expect(canUseStaffWorkspace(session)).toBe(true);
     expect(parseSessionPayload({ data: { userId: "missing-fields" } })).toBeNull();
   });
 
