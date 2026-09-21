@@ -20,6 +20,23 @@ export const permissionSeeds = [
   { code: "permissions_manage", name: "Manage roles and permissions" },
 ] as const;
 
+export const SYNTHETIC_SEED_MODE = "synthetic" as const;
+
+export interface SeedExecutionOptions {
+  mode: string | undefined;
+  nodeEnv: string | undefined;
+}
+
+export function assertSyntheticSeedAllowed(options: SeedExecutionOptions): void {
+  if (options.mode !== SYNTHETIC_SEED_MODE) {
+    throw new Error("Synthetic seed requires BCOZ_SEED_MODE=synthetic.");
+  }
+
+  if (options.nodeEnv !== "development" && options.nodeEnv !== "test") {
+    throw new Error("Synthetic seed is only allowed when NODE_ENV is development or test.");
+  }
+}
+
 export const syntheticUserSeeds = [
   {
     googleSubject: "seed-participant",
@@ -49,7 +66,7 @@ export const syntheticDocumentTypeSeeds = [
   },
 ] as const;
 
-const rolePermissionSeeds = {
+export const rolePermissionSeeds = {
   participant: [],
   staff: [
     "application_read",
@@ -62,13 +79,18 @@ const rolePermissionSeeds = {
   admin: permissionSeeds.map(({ code }) => code),
 } as const;
 
-type SeedClient = PrismaClient | Prisma.TransactionClient;
+export type SeedClient = PrismaClient | Prisma.TransactionClient;
 
-export async function seed(prisma: PrismaClient): Promise<void> {
-  await prisma.$transaction((transaction) => seedDatabase(transaction));
+export async function seed(prisma: PrismaClient, options: SeedExecutionOptions): Promise<void> {
+  assertSyntheticSeedAllowed(options);
+  await prisma.$transaction((transaction) => seedDatabase(transaction, options));
 }
 
-async function seedDatabase(prisma: SeedClient): Promise<void> {
+export async function seedDatabase(
+  prisma: SeedClient,
+  options: SeedExecutionOptions,
+): Promise<void> {
+  assertSyntheticSeedAllowed(options);
   await prisma.campSettings.upsert({
     where: { singletonKey: 1 },
     update: {},
@@ -260,9 +282,13 @@ const isDirectExecution =
 
 if (isDirectExecution) {
   const prisma = new PrismaClient();
+  const seedOptions: SeedExecutionOptions = {
+    mode: process.env.BCOZ_SEED_MODE,
+    nodeEnv: process.env.NODE_ENV,
+  };
 
   try {
-    await seed(prisma);
+    await seed(prisma, seedOptions);
   } finally {
     await prisma.$disconnect();
   }

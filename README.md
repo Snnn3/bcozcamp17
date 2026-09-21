@@ -121,7 +121,7 @@ Local service endpoints:
 | API health check | http://localhost:3000/api/v1/health |
 | MinIO API | http://localhost:9000 |
 | MinIO console | http://localhost:9001 |
-| PostgreSQL | localhost:5432 |
+| PostgreSQL | localhost:55432 |
 
 ## Development
 
