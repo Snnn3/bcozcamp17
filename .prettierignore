@@ -1,0 +1,4 @@
+# Normative project contracts are reviewed as documents, not rewritten by the
+# source formatter.
+**/*.md
+**/*.dbml

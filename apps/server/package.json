@@ -1,0 +1,21 @@
+{
+  "name": "@bcoz/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --env-file=../../.env ../../node_modules/tsx/dist/cli.mjs watch src/server.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node --env-file=../../.env dist/server.js"
+  },
+  "dependencies": {
+    "@bcoz/api": "0.1.0",
+    "@bcoz/auth": "0.1.0",
+    "@bcoz/config": "0.1.0",
+    "@bcoz/db": "0.1.0",
+    "@bcoz/storage": "0.1.0",
+    "@fastify/cors": "^10.0.0",
+    "fastify": "^5.12.5",
+    "google-auth-library": "^11.1.0"
+  }
+}

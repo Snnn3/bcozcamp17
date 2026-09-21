@@ -1,0 +1,14 @@
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+.vite/
+.env
+.env.*
+!.env.example
+*.log
+packages/db/prisma/generated/
+.agents/
+.reviews/
+.codex/

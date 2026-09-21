@@ -1,0 +1,502 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum CampStatus {
+  DRAFT              @map("draft")
+  REGISTRATION_OPEN  @map("registration_open")
+  REGISTRATION_CLOSED @map("registration_closed")
+  ARCHIVED            @map("archived")
+}
+
+enum UserStatus {
+  ACTIVE   @map("active")
+  DISABLED @map("disabled")
+}
+
+enum ApplicationStatus {
+  DRAFT          @map("draft")
+  SUBMITTED      @map("submitted")
+  REVIEWING      @map("reviewing")
+  ACTION_REQUIRED @map("action_required")
+  RESUBMITTED    @map("resubmitted")
+  ACCEPTED       @map("accepted")
+  REJECTED       @map("rejected")
+  WAITLISTED     @map("waitlisted")
+  WITHDRAWN      @map("withdrawn")
+}
+
+enum DocumentStatus {
+  NOT_UPLOADED       @map("not_uploaded")
+  PENDING            @map("pending")
+  APPROVED           @map("approved")
+  CORRECTION_REQUIRED @map("correction_required")
+  REJECTED           @map("rejected")
+}
+
+enum PermissionEffect {
+  ALLOW @map("allow")
+  DENY  @map("deny")
+}
+
+enum ApplicationFieldType {
+  TEXT          @map("text")
+  NUMBER        @map("number")
+  DATE          @map("date")
+  BOOLEAN       @map("boolean")
+  SINGLE_CHOICE @map("single_choice")
+  MULTI_CHOICE  @map("multi_choice")
+}
+
+enum UploadIntentStatus {
+  ISSUED     @map("issued")
+  VALIDATING @map("validating")
+  COMPLETED  @map("completed")
+  FAILED     @map("failed")
+  EXPIRED    @map("expired")
+}
+
+model CampSettings {
+  id                    String     @id @default(uuid()) @db.Uuid
+  singletonKey          Int        @unique @default(1) @map("singleton_key")
+  name                  String     @db.VarChar(255)
+  status                CampStatus
+  timezone              String     @db.VarChar(64)
+  capacity              Int
+  registrationOpensAt   DateTime   @map("registration_opens_at") @db.Timestamptz(3)
+  registrationClosesAt  DateTime   @map("registration_closes_at") @db.Timestamptz(3)
+  correctionClosesAt   DateTime?  @map("correction_closes_at") @db.Timestamptz(3)
+  startsAt              DateTime   @map("starts_at") @db.Timestamptz(3)
+  endsAt                DateTime   @map("ends_at") @db.Timestamptz(3)
+  version               Int        @default(1)
+  privacyNoticeVersion  String     @map("privacy_notice_version") @db.VarChar(50)
+  privacyNoticeUrl      String?    @map("privacy_notice_url") @db.Text
+  createdAt             DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("camp_settings")
+}
+
+model User {
+  id                    String                    @id @default(uuid()) @db.Uuid
+  googleSubject         String                    @unique @map("google_subject") @db.VarChar(255)
+  email                 String                    @unique @db.VarChar(320)
+  status                UserStatus
+  createdAt             DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  roles                 UserRole[]
+  permissions           UserPermission[]          @relation("PermissionSubject")
+  grantedPermissions    UserPermission[]          @relation("PermissionGrantor")
+  participantProfile    ParticipantProfile?
+  statusChanges         ApplicationStatusHistory[] @relation("StatusChanger")
+  uploadedSubmissions   DocumentSubmission[]      @relation("SubmissionUploader")
+  documentReviews       DocumentReviewHistory[]   @relation("ReviewReviewer")
+  notifications         InAppNotification[]
+  auditLogs             AuditLog[]                @relation("AuditActor")
+  uploadIntents         UploadIntent[]            @relation("UploadInitiator")
+  idempotencyRecords    IdempotencyRecord[]
+  authSessions          AuthSession[]
+
+  @@map("users")
+}
+
+model AuthSession {
+  id                String   @id @db.VarChar(128)
+  userId            String   @map("user_id") @db.Uuid
+  csrfToken         String   @map("csrf_token") @db.VarChar(128)
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  lastSeenAt        DateTime @map("last_seen_at") @db.Timestamptz(3)
+  expiresAt         DateTime @map("expires_at") @db.Timestamptz(3)
+  absoluteExpiresAt DateTime @map("absolute_expires_at") @db.Timestamptz(3)
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("auth_sessions")
+}
+
+model AuthOAuthTransaction {
+  state          String   @id @db.VarChar(128)
+  browserBinding String   @map("browser_binding") @db.VarChar(128)
+  nonce          String   @db.VarChar(128)
+  codeVerifier   String   @map("code_verifier") @db.VarChar(128)
+  returnTo       String   @map("return_to") @db.Text
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  expiresAt      DateTime @map("expires_at") @db.Timestamptz(3)
+
+  @@index([expiresAt])
+  @@map("auth_oauth_transactions")
+}
+
+model Role {
+  id          String           @id @default(uuid()) @db.Uuid
+  code        String           @unique @db.VarChar(30)
+  name        String           @db.VarChar(100)
+  users       UserRole[]
+  permissions RolePermission[]
+
+  @@map("roles")
+}
+
+model UserRole {
+  userId    String   @map("user_id") @db.Uuid
+  roleId    String   @map("role_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+model Permission {
+  id          String           @id @default(uuid()) @db.Uuid
+  code        String           @unique @db.VarChar(100)
+  name        String           @db.VarChar(150)
+  roles       RolePermission[]
+  users       UserPermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String     @map("role_id") @db.Uuid
+  permissionId String     @map("permission_id") @db.Uuid
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model UserPermission {
+  userId       String           @map("user_id") @db.Uuid
+  permissionId String           @map("permission_id") @db.Uuid
+  effect       PermissionEffect
+  grantedBy    String           @map("granted_by") @db.Uuid
+  createdAt    DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  user         User             @relation("PermissionSubject", fields: [userId], references: [id], onDelete: Cascade)
+  permission   Permission       @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  grantor      User             @relation("PermissionGrantor", fields: [grantedBy], references: [id], onDelete: Restrict)
+
+  @@id([userId, permissionId])
+  @@map("user_permissions")
+}
+
+model ParticipantProfile {
+  id            String   @id @default(uuid()) @db.Uuid
+  userId        String   @unique @map("user_id") @db.Uuid
+  fullName      String?  @map("full_name") @db.VarChar(255)
+  contactEmail  String?  @map("contact_email") @db.VarChar(320)
+  phone         String?  @db.VarChar(50)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  application   Application?
+
+  @@map("participant_profiles")
+}
+
+model ApplicationField {
+  id          String                  @id @default(uuid()) @db.Uuid
+  fieldCode   String                  @unique @map("field_code") @db.VarChar(100)
+  label       String                  @db.VarChar(255)
+  dataType    ApplicationFieldType    @map("data_type")
+  isRequired  Boolean                 @map("is_required")
+  isActive    Boolean                 @map("is_active")
+  displayOrder Int                   @map("display_order")
+  options     ApplicationFieldOption[]
+  answers     ApplicationAnswer[]
+
+  @@map("application_fields")
+}
+
+model ApplicationFieldOption {
+  id          String            @id @default(uuid()) @db.Uuid
+  fieldId     String            @map("field_id") @db.Uuid
+  optionCode  String            @map("option_code") @db.VarChar(100)
+  label       String            @db.VarChar(255)
+  displayOrder Int             @map("display_order")
+  field       ApplicationField @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+  answers     ApplicationAnswerOption[]
+
+  @@unique([fieldId, optionCode])
+  @@map("application_field_options")
+}
+
+model Application {
+  id                    String                    @id @default(uuid()) @db.Uuid
+  participantId         String                    @unique @map("participant_id") @db.Uuid
+  applicationCode       String?                   @unique @map("application_code") @db.VarChar(100)
+  status                ApplicationStatus
+  version               Int                       @default(1)
+  submittedAt           DateTime?                 @map("submitted_at") @db.Timestamptz(3)
+  correctionDeadline    DateTime?                 @map("correction_deadline") @db.Timestamptz(3)
+  privacyNoticeVersion  String                    @map("privacy_notice_version") @db.VarChar(50)
+  privacyAcknowledgedAt DateTime?                 @map("privacy_acknowledged_at") @db.Timestamptz(3)
+  createdAt             DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  participant           ParticipantProfile        @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  answers               ApplicationAnswer[]
+  statusHistory         ApplicationStatusHistory[]
+  documents             ApplicationDocument[]
+  notificationLinks     NotificationApplication[]
+
+  @@map("applications")
+}
+
+model ApplicationAnswer {
+  id            String                    @id @default(uuid()) @db.Uuid
+  applicationId String                    @map("application_id") @db.Uuid
+  fieldId       String                    @map("field_id") @db.Uuid
+  answerText    String?                   @map("answer_text") @db.Text
+  createdAt     DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  application   Application               @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  field         ApplicationField          @relation(fields: [fieldId], references: [id], onDelete: Restrict)
+  options       ApplicationAnswerOption[]
+
+  @@unique([applicationId, fieldId])
+  @@map("application_answers")
+}
+
+model ApplicationAnswerOption {
+  answerId String            @map("answer_id") @db.Uuid
+  optionId String            @map("option_id") @db.Uuid
+  answer   ApplicationAnswer @relation(fields: [answerId], references: [id], onDelete: Cascade)
+  option   ApplicationFieldOption @relation(fields: [optionId], references: [id], onDelete: Restrict)
+
+  @@id([answerId, optionId])
+  @@map("application_answer_options")
+}
+
+model ApplicationStatusHistory {
+  id            String            @id @default(uuid()) @db.Uuid
+  applicationId String            @map("application_id") @db.Uuid
+  fromStatus    ApplicationStatus? @map("from_status")
+  toStatus      ApplicationStatus  @map("to_status")
+  reason        String?            @db.Text
+  changedBy     String            @map("changed_by") @db.Uuid
+  createdAt     DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  application   Application       @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  changer      User               @relation("StatusChanger", fields: [changedBy], references: [id], onDelete: Restrict)
+
+  @@index([applicationId, createdAt])
+  @@map("application_status_history")
+}
+
+model DocumentType {
+  id                    String                     @id @default(uuid()) @db.Uuid
+  code                  String                     @unique @db.VarChar(100)
+  name                  String                     @db.VarChar(255)
+  isRequired            Boolean                    @map("is_required")
+  maxSizeBytes          BigInt                     @map("max_size_bytes")
+  maxCount              Int                        @map("max_count")
+  maxReplacements       Int                        @map("max_replacements")
+  replacementAllowed    Boolean                    @map("replacement_allowed")
+  isActive              Boolean                    @map("is_active")
+  displayOrder          Int                        @map("display_order")
+  mimeTypes             DocumentTypeMimeType[]
+  applications          ApplicationDocument[]
+
+  @@map("document_types")
+}
+
+model MimeType {
+  id            String                  @id @default(uuid()) @db.Uuid
+  code          String                  @unique @db.VarChar(100)
+  description   String                  @db.VarChar(255)
+  documentTypes DocumentTypeMimeType[]
+
+  @@map("mime_types")
+}
+
+model DocumentTypeMimeType {
+  documentTypeId String       @map("document_type_id") @db.Uuid
+  mimeTypeId     String       @map("mime_type_id") @db.Uuid
+  documentType   DocumentType @relation(fields: [documentTypeId], references: [id], onDelete: Cascade)
+  mimeType       MimeType     @relation(fields: [mimeTypeId], references: [id], onDelete: Cascade)
+
+  @@id([documentTypeId, mimeTypeId])
+  @@map("document_type_mime_types")
+}
+
+model ApplicationDocument {
+  id                  String                   @id @default(uuid()) @db.Uuid
+  applicationId       String                   @map("application_id") @db.Uuid
+  documentTypeId      String                   @map("document_type_id") @db.Uuid
+  status              DocumentStatus
+  applicantMessage    String?                  @map("applicant_message") @db.Text
+  replacementAllowed  Boolean                  @map("replacement_allowed")
+  currentSubmissionId String?                  @unique @map("current_submission_id") @db.Uuid
+  version             Int                      @default(1)
+  replacementCount    Int                      @default(0) @map("replacement_count")
+  createdAt           DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(3)
+  application         Application              @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  documentType        DocumentType             @relation(fields: [documentTypeId], references: [id], onDelete: Restrict)
+  currentSubmission   DocumentSubmission?      @relation("CurrentSubmission", fields: [id, currentSubmissionId], references: [applicationDocumentId, id], onDelete: SetNull)
+  submissions         DocumentSubmission[]     @relation("DocumentVersions")
+  reviewHistory       DocumentReviewHistory[]
+  notificationLinks   NotificationDocument[]
+  uploadIntents       UploadIntent[]
+
+  @@unique([id, currentSubmissionId])
+  @@unique([applicationId, documentTypeId])
+  @@map("application_documents")
+}
+
+model DocumentSubmission {
+  id                   String                 @id @default(uuid()) @db.Uuid
+  applicationDocumentId String                @map("application_document_id") @db.Uuid
+  versionNumber        Int                    @map("version_number")
+  storageKey           String                 @unique @map("storage_key") @db.VarChar(500)
+  originalFilename     String                 @map("original_filename") @db.VarChar(255)
+  mimeType             String                 @map("mime_type") @db.VarChar(100)
+  sizeBytes            BigInt                 @map("size_bytes")
+  checksum             String                 @db.VarChar(128)
+  uploadedBy           String                 @map("uploaded_by") @db.Uuid
+  uploadedAt           DateTime               @default(now()) @map("uploaded_at") @db.Timestamptz(3)
+  applicationDocument  ApplicationDocument    @relation("DocumentVersions", fields: [applicationDocumentId], references: [id], onDelete: Cascade)
+  currentForDocument   ApplicationDocument?   @relation("CurrentSubmission")
+  uploader             User                   @relation("SubmissionUploader", fields: [uploadedBy], references: [id], onDelete: Restrict)
+  reviewHistory        DocumentReviewHistory[] @relation("ReviewSubmission")
+  resultingUploadIntent UploadIntent?         @relation("UploadIntentResult")
+
+  @@unique([applicationDocumentId, id])
+  @@unique([applicationDocumentId, versionNumber])
+  @@map("document_submissions")
+}
+
+model DocumentReviewHistory {
+  id                   String              @id @default(uuid()) @db.Uuid
+  applicationDocumentId String             @map("application_document_id") @db.Uuid
+  submissionId         String              @map("submission_id") @db.Uuid
+  reviewerId           String              @map("reviewer_id") @db.Uuid
+  documentVersion      Int                 @map("document_version")
+  status               DocumentStatus
+  applicantMessage     String              @map("applicant_message") @db.Text
+  internalNote         String?             @map("internal_note") @db.Text
+  replacementAllowed   Boolean             @map("replacement_allowed")
+  createdAt            DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  applicationDocument  ApplicationDocument @relation(fields: [applicationDocumentId], references: [id], onDelete: Cascade)
+  submission           DocumentSubmission  @relation("ReviewSubmission", fields: [applicationDocumentId, submissionId], references: [applicationDocumentId, id], onDelete: Restrict)
+  reviewer             User                @relation("ReviewReviewer", fields: [reviewerId], references: [id], onDelete: Restrict)
+
+  @@index([applicationDocumentId, createdAt])
+  @@map("document_review_history")
+}
+
+model InAppNotification {
+  id           String                    @id @default(uuid()) @db.Uuid
+  userId       String                    @map("user_id") @db.Uuid
+  type         String                    @db.VarChar(50)
+  title        String                    @db.VarChar(255)
+  message      String                    @db.Text
+  isRead       Boolean                   @default(false) @map("is_read")
+  createdAt    DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+  readAt       DateTime?                 @map("read_at") @db.Timestamptz(3)
+  user         User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  applications NotificationApplication[]
+  documents    NotificationDocument[]
+
+  @@map("in_app_notifications")
+}
+
+model NotificationApplication {
+  notificationId String             @map("notification_id") @db.Uuid
+  applicationId  String             @map("application_id") @db.Uuid
+  notification   InAppNotification  @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  application    Application        @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@id([notificationId, applicationId])
+  @@map("notification_applications")
+}
+
+model NotificationDocument {
+  notificationId       String              @map("notification_id") @db.Uuid
+  applicationDocumentId String             @map("application_document_id") @db.Uuid
+  notification         InAppNotification   @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  applicationDocument  ApplicationDocument @relation(fields: [applicationDocumentId], references: [id], onDelete: Cascade)
+
+  @@id([notificationId, applicationDocumentId])
+  @@map("notification_documents")
+}
+
+model AuditLog {
+  id          String           @id @default(uuid()) @db.Uuid
+  actorId     String?          @map("actor_id") @db.Uuid
+  action      String           @db.VarChar(100)
+  entityType  String           @map("entity_type") @db.VarChar(100)
+  entityId    String           @map("entity_id") @db.Uuid
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  actor       User?            @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  values      AuditLogValue[]
+
+  @@index([entityType, entityId])
+  @@map("audit_logs")
+}
+
+model AuditLogValue {
+  auditLogId      String  @map("audit_log_id") @db.Uuid
+  attributeName   String  @map("attribute_name") @db.VarChar(100)
+  oldValueText    String? @map("old_value_text") @db.Text
+  newValueText    String? @map("new_value_text") @db.Text
+  auditLog        AuditLog @relation(fields: [auditLogId], references: [id], onDelete: Cascade)
+
+  @@id([auditLogId, attributeName])
+  @@map("audit_log_values")
+}
+
+model UploadIntent {
+  id                    String             @id @default(uuid()) @db.Uuid
+  applicationDocumentId String             @map("application_document_id") @db.Uuid
+  uploadedBy            String             @map("uploaded_by") @db.Uuid
+  baseDocumentVersion   Int                @map("base_document_version")
+  configurationVersion  Int                @map("configuration_version")
+  stagingKey            String             @unique @map("staging_key") @db.VarChar(500)
+  immutableKey          String?            @unique @map("immutable_key") @db.VarChar(500)
+  originalFilename      String             @map("original_filename") @db.VarChar(255)
+  declaredMimeType      String             @map("declared_mime_type") @db.VarChar(100)
+  declaredSizeBytes     BigInt             @map("declared_size_bytes")
+  status                UploadIntentStatus
+  failureCode           String?            @map("failure_code") @db.VarChar(100)
+  resultSubmissionId    String?            @unique @map("result_submission_id") @db.Uuid
+  createdAt             DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  expiresAt             DateTime           @map("expires_at") @db.Timestamptz(3)
+  leaseExpiresAt        DateTime?          @map("lease_expires_at") @db.Timestamptz(3)
+  completedAt           DateTime?          @map("completed_at") @db.Timestamptz(3)
+  applicationDocument   ApplicationDocument @relation(fields: [applicationDocumentId], references: [id], onDelete: Cascade)
+  uploader              User               @relation("UploadInitiator", fields: [uploadedBy], references: [id], onDelete: Restrict)
+  resultSubmission      DocumentSubmission? @relation("UploadIntentResult", fields: [applicationDocumentId, resultSubmissionId], references: [applicationDocumentId, id], onDelete: SetNull)
+
+  @@index([status, expiresAt])
+  @@index([uploadedBy, status])
+  @@unique([applicationDocumentId, resultSubmissionId])
+  @@map("upload_intents")
+}
+
+model IdempotencyRecord {
+  id                       String   @id @default(uuid()) @db.Uuid
+  actorId                  String   @map("actor_id") @db.Uuid
+  operationScope           String   @map("operation_scope") @db.VarChar(255)
+  key                      String   @db.VarChar(128)
+  requestHash              String   @map("request_hash") @db.VarChar(64)
+  resultType               String   @map("result_type") @db.VarChar(50)
+  resultId                 String   @map("result_id") @db.Uuid
+  resultApplicationVersion Int?     @map("result_application_version")
+  resultDocumentVersion    Int?     @map("result_document_version")
+  httpStatus               Int      @map("http_status")
+  createdAt                DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  expiresAt                DateTime @map("expires_at") @db.Timestamptz(3)
+  actor                    User     @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@unique([actorId, operationScope, key])
+  @@index([expiresAt])
+  @@map("idempotency_records")
+}

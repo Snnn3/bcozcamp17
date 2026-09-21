@@ -1,0 +1,29 @@
+# Prisma migrations
+
+Generate migrations only against a PostgreSQL database that matches the local
+environment configuration:
+
+```text
+npm run db:migrate
+npm run db:seed
+```
+
+The schema is kept in `prisma/schema.prisma`. The committed
+`20260921000000_initial` migration is the reproducible Sprint 0 baseline and
+must be applied before seeding. Its PostgreSQL checks and deferred triggers are
+reviewed with the database contract documents, especially the lifecycle,
+ownership, retry, choice-membership, and immutable document-version rules.
+
+To verify a clean checkout, use an empty PostgreSQL database and run:
+
+```text
+npm run db:migrate
+npm run db:seed
+```
+
+Do not replace the baseline migration with a locally authored schema or edit it
+after it has been applied to a shared environment. Add a new append-only
+migration for later schema changes. To create a new development migration after
+changing schema.prisma, run Prisma's migration authoring command directly, for
+example npx prisma migrate dev --schema packages/db/prisma/schema.prisma
+--name describe-the-change, then review the generated SQL before committing it.
