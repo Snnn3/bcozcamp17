@@ -14,7 +14,7 @@ must be applied before seeding. Its PostgreSQL checks and deferred triggers are
 reviewed with the database contract documents, especially the lifecycle,
 ownership, retry, choice-membership, and immutable document-version rules.
 
-To verify a clean checkout, use an empty PostgreSQL database and run:
+To verify a clean checkout, use an empty PostgreSQL database and run `npm ci`, `npm run db:generate`, `npm run db:migrate`, and `npm run db:seed` in order. The seed creates synthetic identities, roles, permissions, one draft application, and a logical document requirement; it does not create real applicant data or upload bytes.
 
 ```text
 npm run db:migrate

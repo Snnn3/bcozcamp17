@@ -63,7 +63,7 @@ enum UploadIntentStatus {
 
 model CampSettings {
   id                    String     @id @default(uuid()) @db.Uuid
-  singletonKey          Int        @unique @default(1) @map("singleton_key")
+  singletonKey          Int        @db.SmallInt @unique @default(1) @map("singleton_key")
   name                  String     @db.VarChar(255)
   status                CampStatus
   timezone              String     @db.VarChar(64)
@@ -213,6 +213,7 @@ model ApplicationField {
   options     ApplicationFieldOption[]
   answers     ApplicationAnswer[]
 
+  @@index([displayOrder])
   @@map("application_fields")
 }
 
@@ -226,6 +227,7 @@ model ApplicationFieldOption {
   answers     ApplicationAnswerOption[]
 
   @@unique([fieldId, optionCode])
+  @@index([displayOrder])
   @@map("application_field_options")
 }
 
@@ -247,6 +249,7 @@ model Application {
   documents             ApplicationDocument[]
   notificationLinks     NotificationApplication[]
 
+  @@index([status])
   @@map("applications")
 }
 
@@ -304,6 +307,7 @@ model DocumentType {
   mimeTypes             DocumentTypeMimeType[]
   applications          ApplicationDocument[]
 
+  @@index([displayOrder])
   @@map("document_types")
 }
 
@@ -348,6 +352,7 @@ model ApplicationDocument {
 
   @@unique([id, currentSubmissionId])
   @@unique([applicationId, documentTypeId])
+  @@index([applicationId, status])
   @@map("application_documents")
 }
 
@@ -389,6 +394,8 @@ model DocumentReviewHistory {
   reviewer             User                @relation("ReviewReviewer", fields: [reviewerId], references: [id], onDelete: Restrict)
 
   @@index([applicationDocumentId, createdAt])
+  @@index([submissionId])
+  @@unique([applicationDocumentId, documentVersion])
   @@map("document_review_history")
 }
 
@@ -405,6 +412,7 @@ model InAppNotification {
   applications NotificationApplication[]
   documents    NotificationDocument[]
 
+  @@index([userId, isRead, createdAt])
   @@map("in_app_notifications")
 }
 
@@ -415,6 +423,7 @@ model NotificationApplication {
   application    Application        @relation(fields: [applicationId], references: [id], onDelete: Cascade)
 
   @@id([notificationId, applicationId])
+  @@index([applicationId, notificationId])
   @@map("notification_applications")
 }
 
@@ -425,6 +434,7 @@ model NotificationDocument {
   applicationDocument  ApplicationDocument @relation(fields: [applicationDocumentId], references: [id], onDelete: Cascade)
 
   @@id([notificationId, applicationDocumentId])
+  @@index([applicationDocumentId, notificationId])
   @@map("notification_documents")
 }
 
@@ -438,7 +448,7 @@ model AuditLog {
   actor       User?            @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
   values      AuditLogValue[]
 
-  @@index([entityType, entityId])
+  @@index([entityType, entityId, createdAt])
   @@map("audit_logs")
 }
 
