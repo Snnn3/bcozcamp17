@@ -60,7 +60,7 @@ router -> authentication/policy -> service -> repository -> database/external ad
 | API | Fastify, REST, Zod contracts, OpenAPI-ready boundaries |
 | Database | PostgreSQL, Prisma ORM, Prisma Migrate |
 | Authentication | Google OpenID Connect with a server-managed session |
-| File storage | Private S3-compatible storage; MinIO/RustFS for local development only |
+| File storage | Private S3-compatible storage; MinIO locally |
 | Testing | Vitest, Testing Library, Playwright |
 | Code quality | Oxfmt and Oxlint with strict TypeScript checks |
 | Delivery | GitHub Actions, Docker, approved container hosting |
@@ -98,13 +98,11 @@ On macOS/Linux:
 cp .env.example .env
 ```
 
-Start PostgreSQL for the required local checks:
+Start PostgreSQL and MinIO:
 
 ```bash
-docker compose -f infra/docker-compose.yml up -d postgres
+docker compose -f infra/docker-compose.yml up -d
 ```
-
-The Compose file also defines optional local object storage. Docker Hub may reject the unpinned `minio/minio:latest` image, and that failure is separate from PostgreSQL. Do not use MinIO as a production dependency. For upload integration tests, pin a currently published local S3-compatible image before starting the optional storage service; production uses a private provider such as the Cloudflare R2 candidate described in [the deployment recommendation](docs/PROJECT_SPEC.md#14-deployment-recommendation).
 
 Generate the Prisma client, apply the development schema, and seed synthetic baseline data:
 
@@ -121,7 +119,8 @@ Local service endpoints:
 | Participant Web | http://localhost:5173 |
 | Staff Web | http://localhost:5174 |
 | API health check | http://localhost:3000/api/v1/health |
-| MinIO API/console | Optional local storage service; only available when its image is configured and started |
+| MinIO API | http://localhost:9000 |
+| MinIO console | http://localhost:9001 |
 | PostgreSQL | localhost:5432 |
 
 ## Development

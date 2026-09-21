@@ -288,7 +288,7 @@ Keep business rules in the API service layer, not only in React components or ro
 | Database | PostgreSQL | Transactional relational storage. |
 | ORM/migrations | Prisma ORM + Prisma Migrate | Type-safe queries and migrations. |
 | Authentication | Google login via OpenID Connect; Better Auth or approved server-side library | Google is the confirmed identity provider for Participant, Staff, and Admin; see section 19. |
-| File storage | Private S3-compatible storage | MinIO/RustFS for local development only; production uses a private maintained provider, with Cloudflare R2 as the current candidate. |
+| File storage | Private S3-compatible storage | MinIO/RustFS locally; production provider TBA. |
 | Testing | Vitest, Testing Library, Playwright | Unit/component/integration/E2E coverage. |
 | Code quality | Ultracite with one selected provider, or the approved equivalent | Do not run competing formatter/linter configurations. |
 | CI/deployment | GitHub Actions, Docker, approved container host | Run quality gates before merge/deploy. |
@@ -478,9 +478,9 @@ The shared architecture is:
 
 - **Frontend:** Cloudflare Pages Free for the Participant Web and Staff Web if both apps are built as static client applications. Static asset requests are free; the Free plan currently allows up to 500 builds per month and 20,000 files per site. If TanStack Start SSR becomes a requirement, run the Node applications on the VPS instead.
 - **Application and database server:** Choose one of the approved DigitalOcean options above. The 2 GiB option runs the API, PostgreSQL, and reverse proxy with Docker Compose. The 4 GiB option can run those services with self-hosted Coolify.
-- **Document storage:** Cloudflare R2 Standard, private bucket, accessed through short-lived signed URLs. R2 currently includes 10 GB-month of storage, 1 million Class A operations, and 10 million Class B operations per month; egress is free. Do not make the bucket public. MinIO/RustFS is a local-development dependency only and must not be used as the production document store.
+- **Document storage:** Cloudflare R2 Standard, private bucket, accessed through short-lived signed URLs. R2 currently includes 10 GB-month of storage, 1 million Class A operations, and 10 million Class B operations per month; egress is free. Do not make the bucket public.
 - **Reverse proxy and TLS:** Caddy or Nginx on the VPS for the Compose option; Coolify's managed proxy for the Coolify option. `api.example.com` points to the VPS, while `example.com` and `staff.example.com` point to their respective Cloudflare Pages projects.
-- **Deployment:** Use Docker Compose + Caddy for the Economy option, or self-hosted Coolify for the Easier operations option. Do not add both deployment control planes to the same server. The current local Compose file may reference the unpinned Docker Hub image `minio/minio:latest`; a rejected image pull is a local storage-image problem, not a reason to expose PostgreSQL or change the production architecture. Pin a currently published local S3-compatible image before enabling that optional service.
+- **Deployment:** Use Docker Compose + Caddy for the Economy option, or self-hosted Coolify for the Easier operations option. Do not add both deployment control planes to the same server.
 - **Protection:** Add Cloudflare Turnstile to public registration/login actions if abuse or bot submissions are a concern. The Free plan supports production use.
 
 Required cost-control decisions:
@@ -613,21 +613,6 @@ The committed test script should model ramp-up, human think time, idempotent wri
 ### Release decision
 
 The production size is approved only after the target test passes in staging with the same container images, database indexes, storage rules, and environment settings planned for production. The 200-user target is an acceptance criterion, not a guarantee that can be inferred from the VPS specification alone.
-
-### Deployment and promotion checklist for 200 concurrent users
-
-Use this as the minimum promotion sequence for the current candidate architecture:
-
-1. Build and tag one release containing the API, database migration, and both frontend artifacts.
-2. Deploy Participant Web and Staff Web as separate static frontend projects, and route `api.example.com` through the VPS reverse proxy with TLS.
-3. Keep PostgreSQL private to the VPS and use a bounded connection pool. Keep the R2 bucket private; the API issues short-lived signed upload/download URLs.
-4. Run the smoke, baseline, target, spike, upload, and soak profiles from a separate load-generator machine. The target test is 200 virtual users for 15 minutes, with the thresholds above.
-5. Capture the target-test evidence: p50/p95/p99 latency, throughput, errors, active users, database connections, VPS CPU/memory/disk, and object-storage errors.
-6. Run a synthetic backup-and-restore rehearsal and verify that database rows and referenced document objects restore together.
-7. Verify exact production origins, Google OAuth callbacks, credentialed CORS, secure cookies, health checks, structured logs, and disk/database/object-storage alerts.
-8. Open registration only when the target test, restore rehearsal, authentication checks, and launch gates pass. If the target fails, optimize first or move to the 4 vCPU / 8 GiB candidate; do not claim capacity from instance size alone.
-
-MinIO/RustFS remains suitable for local development and automated tests only. It is not the production storage plan, and production documents must never depend on a local container or a public bucket.
 
 ## 16. Complete lifecycle and invariants
 
