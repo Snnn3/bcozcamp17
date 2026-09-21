@@ -564,7 +564,22 @@ Existing errors map as follows: stale versions, invalid transitions, closed regi
 
 ## 12. Google authentication integration contract
 
-Authentication routes are owned by the selected library and may live outside `/api/v1`. Before implementation freeze, record its exact start/callback/session/logout paths in the OpenAPI integration notes and Google Cloud configuration. Do not implement a second parallel OAuth handler.
+This release selects Google's `google-auth-library` as the provider integration
+for authorization-code exchange, ID-token verification, nonce validation, and
+Google key rotation. The application owns only the local boundary around that
+provider client: it persists `auth_sessions` and
+`auth_oauth_transactions` with the Prisma migrations, provisions the local
+`users` row, and exposes the exact paths below. There is one OAuth handler; no
+second provider or password/session handler is allowed.
+
+| Local operation | Exact path | Selected-library boundary |
+|---|---|---|
+| Start Google login | `GET /auth/google/start` | Creates the browser-bound state/nonce/PKCE transaction and calls the Google client URL contract |
+| Google callback | `GET /auth/google/callback` | Exchanges the code and verifies the ID token with `google-auth-library` |
+| Read local session | `GET /api/v1/auth/session` | Reads the Prisma-backed local session and current permissions |
+| Logout | `POST /api/v1/auth/logout` | Revokes the Prisma-backed local session after CSRF validation |
+
+The route mapping and redirect URI must match the Google Cloud configuration.
 
 | Operation | Required behavior |
 |---|---|

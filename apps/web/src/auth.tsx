@@ -1,22 +1,13 @@
 /// <reference types="vite/client" />
 
 import { useEffect, useState, type ReactElement, type ReactNode } from "react";
+import {
+  canUseStaffWorkspace,
+  createGoogleLoginUrl,
+  readAuthSession,
+  type SessionState,
+} from "@bcoz/auth";
 import { AppShell, PageHeading, StatusBanner } from "@bcoz/ui";
-import type { RoleCode } from "@bcoz/validation";
-
-interface SessionSnapshot {
-  userId: string;
-  email: string;
-  roles: RoleCode[];
-  permissions: string[];
-  expiresAt: string;
-}
-
-type SessionState =
-  | { status: "loading" }
-  | { status: "unauthenticated" }
-  | { status: "error" }
-  | { status: "authenticated"; session: SessionSnapshot };
 
 interface RouteGuardProps {
   audience: "participant" | "staff";
@@ -30,7 +21,7 @@ export function RouteGuard({ audience, children }: RouteGuardProps): ReactElemen
 
   useEffect(() => {
     let mounted = true;
-    void readSession().then((nextState) => {
+    void readAuthSession(API_ORIGIN).then((nextState) => {
       if (mounted) {
         setState(nextState);
       }
@@ -111,66 +102,7 @@ function LoginPage({ audience }: Pick<RouteGuardProps, "audience">): ReactElemen
   );
 }
 
-async function readSession(): Promise<SessionState> {
-  try {
-    const response = await fetch(`${API_ORIGIN}/api/v1/auth/session`, {
-      credentials: "include",
-      headers: { Accept: "application/json" },
-    });
-    if (response.status === 401) {
-      return { status: "unauthenticated" };
-    }
-    if (!response.ok) {
-      return { status: "error" };
-    }
-
-    const payload: unknown = await response.json();
-    const session = parseSessionPayload(payload);
-    return session === null ? { status: "error" } : { status: "authenticated", session };
-  } catch {
-    return { status: "error" };
-  }
-}
-
-function parseSessionPayload(payload: unknown): SessionSnapshot | null {
-  if (!isRecord(payload) || !isRecord(payload.data)) {
-    return null;
-  }
-  const data = payload.data;
-  if (
-    typeof data.userId !== "string" ||
-    typeof data.email !== "string" ||
-    typeof data.expiresAt !== "string" ||
-    !Array.isArray(data.roles) ||
-    !Array.isArray(data.permissions) ||
-    !data.roles.every(
-      (role): role is RoleCode => role === "participant" || role === "staff" || role === "admin",
-    ) ||
-    !data.permissions.every((permission): permission is string => typeof permission === "string")
-  ) {
-    return null;
-  }
-  return {
-    userId: data.userId,
-    email: data.email,
-    roles: data.roles,
-    permissions: data.permissions,
-    expiresAt: data.expiresAt,
-  };
-}
-
-function canUseStaffWorkspace(session: SessionSnapshot): boolean {
-  return (
-    (session.roles.includes("staff") || session.roles.includes("admin")) &&
-    session.permissions.includes("application_read")
-  );
-}
-
 function createLoginUrl(): string {
   const returnTo = `${window.location.origin}${window.location.pathname}${window.location.search}`;
-  return `${API_ORIGIN}/auth/google/start?returnTo=${encodeURIComponent(returnTo)}`;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return createGoogleLoginUrl(API_ORIGIN, returnTo);
 }

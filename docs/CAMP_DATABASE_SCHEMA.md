@@ -778,7 +778,13 @@ Unique `(actor_id, operation_scope, key)`; index expires_at. Record only committ
 9. Runtime roles cannot mutate/delete histories directly. Foreign keys restrict deletion of referenced history/configuration. Approved retention cleanup is a separate privileged, audited process with a retryable deletion manifest; privacy deletion is not permanently prohibited by append-only history requirements.
 10. Audit scalar values are allowlisted metadata only: status, revisions, policy changes, and opaque IDs. Do not copy private answers, contact details, notes, tokens, or document text into audit values. A grant's reason belongs in controlled audit metadata.
 
-The auth provider's session, token, and account tables are intentionally outside this domain DBML; include and verify its actual migrations once selected. Do not build a second password/session system merely because these tables are absent from this diagram.
+The selected provider integration is Google's `google-auth-library`; it verifies
+provider tokens but does not own local application sessions. The application
+therefore owns the append-only Prisma migration for `auth_sessions` and
+`auth_oauth_transactions`, which are intentionally outside this domain DBML.
+Those migrations must be applied and verified alongside the domain migration.
+Do not build a second password/session system merely because these tables are
+absent from this diagram.
 
 Google is the confirmed provider. `users.google_subject` is required and unique; simultaneous callbacks must resolve one local user. If the library also stores provider/account rows, bind `(provider = google, providerAccountId = sub)` uniquely to that same user in one transaction. Do not allow those rows and the domain subject to disagree. Sessions reference local users and support server-side expiry/revocation. Persist only minimal verified identity metadata; optional Google photos are not required application data.
 

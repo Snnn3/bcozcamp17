@@ -2,9 +2,11 @@ import { randomUUID } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
 import { afterAll, describe, expect, it } from "vitest";
 
-const databaseTests = process.env.DATABASE_URL === undefined ? describe.skip : describe;
+if (process.env.DATABASE_URL === undefined || process.env.DATABASE_URL.trim() === "") {
+  throw new Error("DATABASE_URL is required for PostgreSQL integration tests.");
+}
 
-databaseTests("PostgreSQL lifecycle constraints", () => {
+describe("PostgreSQL lifecycle constraints", () => {
   const prisma = new PrismaClient();
 
   afterAll(async () => {

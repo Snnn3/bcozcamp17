@@ -100,8 +100,37 @@ model User {
   auditLogs             AuditLog[]                @relation("AuditActor")
   uploadIntents         UploadIntent[]            @relation("UploadInitiator")
   idempotencyRecords    IdempotencyRecord[]
+  authSessions          AuthSession[]
 
   @@map("users")
+}
+
+model AuthSession {
+  id                String   @id @db.VarChar(128)
+  userId            String   @map("user_id") @db.Uuid
+  csrfToken         String   @map("csrf_token") @db.VarChar(128)
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  lastSeenAt        DateTime @map("last_seen_at") @db.Timestamptz(3)
+  expiresAt         DateTime @map("expires_at") @db.Timestamptz(3)
+  absoluteExpiresAt DateTime @map("absolute_expires_at") @db.Timestamptz(3)
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("auth_sessions")
+}
+
+model AuthOAuthTransaction {
+  state          String   @id @db.VarChar(128)
+  browserBinding String   @map("browser_binding") @db.VarChar(128)
+  nonce          String   @db.VarChar(128)
+  codeVerifier   String   @map("code_verifier") @db.VarChar(128)
+  returnTo       String   @map("return_to") @db.Text
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  expiresAt      DateTime @map("expires_at") @db.Timestamptz(3)
+
+  @@index([expiresAt])
+  @@map("auth_oauth_transactions")
 }
 
 model Role {

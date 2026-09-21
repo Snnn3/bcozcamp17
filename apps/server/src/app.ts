@@ -1,6 +1,7 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import { env } from "@bcoz/config";
+import { createDatabaseClient, type PrismaClient } from "@bcoz/db";
 import {
   createAuthBoundaryDependencies,
   createGoogleOidcProvider,
@@ -28,19 +29,44 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   const googleProvider =
     options.auth?.googleProvider ??
     createGoogleOidcProvider(env.googleClientId, env.googleClientSecret);
-  registerAuthRoutes(
-    server,
-    createAuthBoundaryDependencies({
-      ...options.auth,
-      googleProvider,
-      secureCookies: options.auth?.secureCookies ?? env.nodeEnv === "production",
-    }),
-    {
-      allowedOrigins: env.webOrigins,
-      googleClientId: env.googleClientId,
-      googleRedirectUri: env.googleRedirectUri,
-    },
-  );
+  const canCreateDefaultDatabase =
+    options.auth?.prisma === undefined &&
+    options.auth?.sessionStore === undefined &&
+    options.auth?.transactionStore === undefined &&
+    options.auth?.userDirectory === undefined;
+  const ownedPrisma: PrismaClient | undefined =
+    canCreateDefaultDatabase && env.databaseUrl !== undefined
+      ? createDatabaseClient(env.databaseUrl)
+      : undefined;
+
+  try {
+    registerAuthRoutes(
+      server,
+      createAuthBoundaryDependencies({
+        ...options.auth,
+        ...(ownedPrisma === undefined ? {} : { prisma: ownedPrisma }),
+        googleProvider,
+        production: env.nodeEnv === "production",
+        secureCookies: options.auth?.secureCookies ?? env.nodeEnv === "production",
+      }),
+      {
+        allowedOrigins: env.webOrigins,
+        googleClientId: env.googleClientId,
+        googleRedirectUri: env.googleRedirectUri,
+      },
+    );
+  } catch (error: unknown) {
+    if (ownedPrisma !== undefined) {
+      await ownedPrisma.$disconnect();
+    }
+    throw error;
+  }
+
+  if (ownedPrisma !== undefined) {
+    server.addHook("onClose", async () => {
+      await ownedPrisma.$disconnect();
+    });
+  }
 
   return server;
 }

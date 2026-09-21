@@ -1,16 +1,19 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { type ApiErrorCode, createSuccessResponse } from "@bcoz/api";
-import { OAuth2Client, type LoginTicket } from "google-auth-library";
+import { PermissionEffect, Prisma, UserStatus, type PrismaClient } from "@bcoz/db";
 import {
   effectivePermissionCodes,
   hasPermission,
   hasRole,
   type AuthenticatedPrincipal,
 } from "@bcoz/auth";
+import type { RoleCode } from "@bcoz/validation";
+import { OAuth2Client, type LoginTicket } from "google-auth-library";
 
 export const SESSION_COOKIE_NAME = "bcoz_session";
 export const CSRF_COOKIE_NAME = "bcoz_csrf";
+export const OAUTH_BROWSER_BINDING_COOKIE_NAME = "bcoz_oauth_binding";
 export const SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1_000;
 export const SESSION_ABSOLUTE_TIMEOUT_MS = 12 * 60 * 60 * 1_000;
 export const OAUTH_TRANSACTION_TIMEOUT_MS = 10 * 60 * 1_000;
@@ -26,16 +29,20 @@ export interface SessionRecord {
 }
 
 export interface SessionStore {
-  create(principal: AuthenticatedPrincipal, now: number): SessionRecord;
-  get(sessionId: string, now: number): SessionRecord | null;
-  rotate(sessionId: string, principal: AuthenticatedPrincipal, now: number): SessionRecord | null;
-  revoke(sessionId: string): void;
+  create(principal: AuthenticatedPrincipal, now: number): Promise<SessionRecord>;
+  get(sessionId: string, now: number): Promise<SessionRecord | null>;
+  rotate(
+    sessionId: string,
+    principal: AuthenticatedPrincipal,
+    now: number,
+  ): Promise<SessionRecord | null>;
+  revoke(sessionId: string): Promise<void>;
 }
 
 export class InMemorySessionStore implements SessionStore {
   private readonly sessions = new Map<string, SessionRecord>();
 
-  public create(principal: AuthenticatedPrincipal, now: number): SessionRecord {
+  public async create(principal: AuthenticatedPrincipal, now: number): Promise<SessionRecord> {
     const session: SessionRecord = {
       sessionId: randomToken(),
       csrfToken: randomToken(),
@@ -49,7 +56,7 @@ export class InMemorySessionStore implements SessionStore {
     return session;
   }
 
-  public get(sessionId: string, now: number): SessionRecord | null {
+  public async get(sessionId: string, now: number): Promise<SessionRecord | null> {
     const session = this.sessions.get(sessionId);
     if (session === undefined || session.expiresAt <= now || session.absoluteExpiresAt <= now) {
       if (session !== undefined) {
@@ -67,12 +74,12 @@ export class InMemorySessionStore implements SessionStore {
     return refreshedSession;
   }
 
-  public rotate(
+  public async rotate(
     sessionId: string,
     principal: AuthenticatedPrincipal,
     now: number,
-  ): SessionRecord | null {
-    const currentSession = this.get(sessionId, now);
+  ): Promise<SessionRecord | null> {
+    const currentSession = await this.get(sessionId, now);
     if (currentSession === null) {
       return null;
     }
@@ -81,13 +88,14 @@ export class InMemorySessionStore implements SessionStore {
     return this.create(principal, now);
   }
 
-  public revoke(sessionId: string): void {
+  public async revoke(sessionId: string): Promise<void> {
     this.sessions.delete(sessionId);
   }
 }
 
 export interface OAuthTransaction {
   state: string;
+  browserBinding: string;
   nonce: string;
   codeVerifier: string;
   returnTo: string;
@@ -95,16 +103,21 @@ export interface OAuthTransaction {
 }
 
 export interface OAuthTransactionStore {
-  create(returnTo: string, now: number): OAuthTransaction;
-  consume(state: string, now: number): OAuthTransaction | null;
+  create(returnTo: string, browserBinding: string, now: number): Promise<OAuthTransaction>;
+  consume(state: string, browserBinding: string, now: number): Promise<OAuthTransaction | null>;
 }
 
 export class InMemoryOAuthTransactionStore implements OAuthTransactionStore {
   private readonly transactions = new Map<string, OAuthTransaction>();
 
-  public create(returnTo: string, now: number): OAuthTransaction {
+  public async create(
+    returnTo: string,
+    browserBinding: string,
+    now: number,
+  ): Promise<OAuthTransaction> {
     const transaction: OAuthTransaction = {
       state: randomToken(),
+      browserBinding,
       nonce: randomToken(),
       codeVerifier: randomToken(),
       returnTo,
@@ -114,13 +127,180 @@ export class InMemoryOAuthTransactionStore implements OAuthTransactionStore {
     return transaction;
   }
 
-  public consume(state: string, now: number): OAuthTransaction | null {
+  public async consume(
+    state: string,
+    browserBinding: string,
+    now: number,
+  ): Promise<OAuthTransaction | null> {
     const transaction = this.transactions.get(state);
-    this.transactions.delete(state);
     if (transaction === undefined || transaction.expiresAt <= now) {
+      this.transactions.delete(state);
       return null;
     }
+    if (transaction.browserBinding !== browserBinding) {
+      return null;
+    }
+    this.transactions.delete(state);
     return transaction;
+  }
+}
+
+export class PrismaSessionStore implements SessionStore {
+  public constructor(
+    private readonly prisma: PrismaClient,
+    private readonly userDirectory: UserDirectory,
+  ) {}
+
+  public async create(principal: AuthenticatedPrincipal, now: number): Promise<SessionRecord> {
+    const sessionId = randomToken();
+    const csrfToken = randomToken();
+    const createdAt = new Date(now);
+    const expiresAt = new Date(now + SESSION_IDLE_TIMEOUT_MS);
+    const absoluteExpiresAt = new Date(now + SESSION_ABSOLUTE_TIMEOUT_MS);
+    await this.prisma.authSession.create({
+      data: {
+        id: sessionId,
+        userId: principal.userId,
+        csrfToken,
+        createdAt,
+        lastSeenAt: createdAt,
+        expiresAt,
+        absoluteExpiresAt,
+      },
+    });
+    return {
+      sessionId,
+      csrfToken,
+      principal,
+      createdAt: createdAt.getTime(),
+      lastSeenAt: createdAt.getTime(),
+      expiresAt: expiresAt.getTime(),
+      absoluteExpiresAt: absoluteExpiresAt.getTime(),
+    };
+  }
+
+  public async get(sessionId: string, now: number): Promise<SessionRecord | null> {
+    const stored = await this.prisma.authSession.findUnique({ where: { id: sessionId } });
+    if (stored === null) {
+      return null;
+    }
+    if (stored.expiresAt.getTime() <= now || stored.absoluteExpiresAt.getTime() <= now) {
+      await this.revoke(sessionId);
+      return null;
+    }
+
+    const principal = await this.userDirectory.getPrincipal(stored.userId);
+    if (principal === null || principal.status === "disabled") {
+      await this.revoke(sessionId);
+      return null;
+    }
+
+    const lastSeenAt = new Date(now);
+    const expiresAt = new Date(
+      Math.min(now + SESSION_IDLE_TIMEOUT_MS, stored.absoluteExpiresAt.getTime()),
+    );
+    const updated = await this.prisma.authSession.updateMany({
+      where: { id: sessionId },
+      data: { lastSeenAt, expiresAt },
+    });
+    if (updated.count !== 1) {
+      return null;
+    }
+
+    return {
+      sessionId: stored.id,
+      csrfToken: stored.csrfToken,
+      principal,
+      createdAt: stored.createdAt.getTime(),
+      lastSeenAt: lastSeenAt.getTime(),
+      expiresAt: expiresAt.getTime(),
+      absoluteExpiresAt: stored.absoluteExpiresAt.getTime(),
+    };
+  }
+
+  public async rotate(
+    sessionId: string,
+    principal: AuthenticatedPrincipal,
+    now: number,
+  ): Promise<SessionRecord | null> {
+    const current = await this.get(sessionId, now);
+    if (current === null) {
+      return null;
+    }
+    await this.revoke(sessionId);
+    return this.create(principal, now);
+  }
+
+  public async revoke(sessionId: string): Promise<void> {
+    await this.prisma.authSession.deleteMany({ where: { id: sessionId } });
+  }
+}
+
+export class PrismaOAuthTransactionStore implements OAuthTransactionStore {
+  public constructor(private readonly prisma: PrismaClient) {}
+
+  public async create(
+    returnTo: string,
+    browserBinding: string,
+    now: number,
+  ): Promise<OAuthTransaction> {
+    const transaction: OAuthTransaction = {
+      state: randomToken(),
+      browserBinding,
+      nonce: randomToken(),
+      codeVerifier: randomToken(),
+      returnTo,
+      expiresAt: now + OAUTH_TRANSACTION_TIMEOUT_MS,
+    };
+    await this.prisma.authOAuthTransaction.create({
+      data: {
+        state: transaction.state,
+        browserBinding: transaction.browserBinding,
+        nonce: transaction.nonce,
+        codeVerifier: transaction.codeVerifier,
+        returnTo: transaction.returnTo,
+        createdAt: new Date(now),
+        expiresAt: new Date(transaction.expiresAt),
+      },
+    });
+    return transaction;
+  }
+
+  public async consume(
+    state: string,
+    browserBinding: string,
+    now: number,
+  ): Promise<OAuthTransaction | null> {
+    return this.prisma.$transaction(async (transactionClient) => {
+      const stored = await transactionClient.authOAuthTransaction.findUnique({
+        where: { state },
+      });
+      if (stored === null) {
+        return null;
+      }
+      if (stored.expiresAt.getTime() <= now) {
+        await transactionClient.authOAuthTransaction.deleteMany({ where: { state } });
+        return null;
+      }
+      if (stored.browserBinding !== browserBinding) {
+        return null;
+      }
+
+      const deleted = await transactionClient.authOAuthTransaction.deleteMany({
+        where: { state, browserBinding },
+      });
+      if (deleted.count !== 1) {
+        return null;
+      }
+      return {
+        state: stored.state,
+        browserBinding: stored.browserBinding,
+        nonce: stored.nonce,
+        codeVerifier: stored.codeVerifier,
+        returnTo: stored.returnTo,
+        expiresAt: stored.expiresAt.getTime(),
+      } satisfies OAuthTransaction;
+    });
   }
 }
 
@@ -200,8 +380,8 @@ export class GoogleOidcProvider implements GoogleIdentityProvider {
     }
 
     return {
-      subject: payload.sub,
-      email: payload.email,
+      subject: payload.sub.trim(),
+      email: payload.email.trim(),
       emailVerified: true,
     };
   }
@@ -219,6 +399,7 @@ export function createGoogleOidcProvider(
 
 export interface UserDirectory {
   resolveGoogleIdentity(identity: VerifiedGoogleIdentity): Promise<UserResolution>;
+  getPrincipal(userId: string): Promise<AuthenticatedPrincipal | null>;
 }
 
 export type UserResolution =
@@ -267,6 +448,121 @@ export class InMemoryUserDirectory implements UserDirectory {
     this.users.set(identity.subject, principal);
     return { kind: "authenticated", principal };
   }
+
+  public async getPrincipal(userId: string): Promise<AuthenticatedPrincipal | null> {
+    return [...this.users.values()].find((principal) => principal.userId === userId) ?? null;
+  }
+}
+
+export class PrismaUserDirectory implements UserDirectory {
+  public constructor(private readonly prisma: PrismaClient) {}
+
+  public async resolveGoogleIdentity(identity: VerifiedGoogleIdentity): Promise<UserResolution> {
+    const normalizedEmail = identity.email.trim().toLowerCase();
+    const existingBySubject = await this.prisma.user.findUnique({
+      where: { googleSubject: identity.subject },
+    });
+    if (existingBySubject !== null) {
+      if (existingBySubject.status === UserStatus.DISABLED) {
+        return { kind: "disabled" };
+      }
+      const existingByEmail = await this.prisma.user.findUnique({
+        where: { email: normalizedEmail },
+      });
+      if (existingByEmail !== null && existingByEmail.id !== existingBySubject.id) {
+        return { kind: "email_collision" };
+      }
+      if (existingBySubject.email !== normalizedEmail) {
+        await this.prisma.user.update({
+          where: { id: existingBySubject.id },
+          data: { email: normalizedEmail },
+        });
+      }
+      const principal = await this.getPrincipal(existingBySubject.id);
+      return principal === null
+        ? { kind: "email_collision" }
+        : { kind: "authenticated", principal };
+    }
+
+    const existingByEmail = await this.prisma.user.findUnique({
+      where: { email: normalizedEmail },
+    });
+    if (existingByEmail !== null) {
+      return { kind: "email_collision" };
+    }
+
+    try {
+      const created = await this.prisma.user.create({
+        data: {
+          googleSubject: identity.subject,
+          email: normalizedEmail,
+          status: UserStatus.ACTIVE,
+          roles: {
+            create: {
+              role: { connect: { code: "participant" } },
+            },
+          },
+        },
+      });
+      const principal = await this.getPrincipal(created.id);
+      return principal === null
+        ? { kind: "email_collision" }
+        : { kind: "authenticated", principal };
+    } catch (error: unknown) {
+      if (!isPrismaUniqueConstraintError(error)) {
+        throw error;
+      }
+      const racedSubject = await this.prisma.user.findUnique({
+        where: { googleSubject: identity.subject },
+      });
+      if (racedSubject !== null) {
+        return this.resolveGoogleIdentity(identity);
+      }
+      return { kind: "email_collision" };
+    }
+  }
+
+  public async getPrincipal(userId: string): Promise<AuthenticatedPrincipal | null> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: {
+        roles: {
+          include: {
+            role: {
+              include: {
+                permissions: { include: { permission: true } },
+              },
+            },
+          },
+        },
+        permissions: { include: { permission: true } },
+      },
+    });
+    if (user === null) {
+      return null;
+    }
+
+    const roles = user.roles
+      .map(({ role }) => role.code)
+      .filter((code): code is RoleCode => isRoleCode(code));
+    const rolePermissions = user.roles.flatMap(({ role }) =>
+      role.permissions.map(({ permission }) => ({
+        code: permission.code,
+        effect: "allow" as const,
+      })),
+    );
+    const userPermissions = user.permissions.map(({ permission, effect }) => ({
+      code: permission.code,
+      effect: effect === PermissionEffect.ALLOW ? ("allow" as const) : ("deny" as const),
+    }));
+    return {
+      userId: user.id,
+      email: user.email,
+      status: user.status === UserStatus.DISABLED ? "disabled" : "active",
+      roles,
+      permissions: [...rolePermissions, ...userPermissions],
+    };
+  }
 }
 
 export interface AuthBoundaryDependencies {
@@ -283,6 +579,8 @@ export interface AuthBoundaryOptions {
   transactionStore?: OAuthTransactionStore;
   userDirectory?: UserDirectory;
   googleProvider?: GoogleIdentityProvider | undefined;
+  prisma?: PrismaClient;
+  production?: boolean;
   now?: () => number;
   secureCookies?: boolean;
 }
@@ -290,10 +588,34 @@ export interface AuthBoundaryOptions {
 export function createAuthBoundaryDependencies(
   options: AuthBoundaryOptions = {},
 ): AuthBoundaryDependencies {
+  const durableUserDirectory =
+    options.prisma === undefined ? undefined : new PrismaUserDirectory(options.prisma);
+  const userDirectory =
+    options.userDirectory ?? durableUserDirectory ?? new InMemoryUserDirectory();
+  const sessionStore =
+    options.sessionStore ??
+    (options.prisma === undefined
+      ? new InMemorySessionStore()
+      : new PrismaSessionStore(options.prisma, userDirectory));
+  const transactionStore =
+    options.transactionStore ??
+    (options.prisma === undefined
+      ? new InMemoryOAuthTransactionStore()
+      : new PrismaOAuthTransactionStore(options.prisma));
+
+  if (
+    options.production === true &&
+    (sessionStore instanceof InMemorySessionStore ||
+      transactionStore instanceof InMemoryOAuthTransactionStore ||
+      userDirectory instanceof InMemoryUserDirectory)
+  ) {
+    throw new Error("Production authentication requires durable database adapters.");
+  }
+
   return {
-    sessionStore: options.sessionStore ?? new InMemorySessionStore(),
-    transactionStore: options.transactionStore ?? new InMemoryOAuthTransactionStore(),
-    userDirectory: options.userDirectory ?? new InMemoryUserDirectory(),
+    sessionStore,
+    transactionStore,
+    userDirectory,
     googleProvider: options.googleProvider,
     now: options.now ?? (() => Date.now()),
     secureCookies: options.secureCookies ?? false,
@@ -328,7 +650,7 @@ export function registerAuthRoutes(
   options: RegisterAuthRoutesOptions,
 ): void {
   server.get("/api/v1/auth/session", async (request, reply) => {
-    const session = getActiveSession(request, dependencies);
+    const session = await getActiveSession(request, dependencies);
     if (session === null) {
       return sendApiError(reply, 401, "AUTHENTICATION_REQUIRED", "Authentication is required.");
     }
@@ -348,16 +670,19 @@ export function registerAuthRoutes(
   server.post("/api/v1/auth/logout", async (request, reply) => {
     const sessionId = getCookie(request.headers.cookie, SESSION_COOKIE_NAME);
     const session =
-      sessionId === undefined ? null : dependencies.sessionStore.get(sessionId, dependencies.now());
+      sessionId === undefined
+        ? null
+        : await dependencies.sessionStore.get(sessionId, dependencies.now());
 
     if (session !== null && !hasValidCsrfToken(request, session.csrfToken)) {
       return sendApiError(reply, 403, "FORBIDDEN", "The request could not be verified.");
     }
 
     if (sessionId !== undefined) {
-      dependencies.sessionStore.revoke(sessionId);
+      await dependencies.sessionStore.revoke(sessionId);
     }
     clearSessionCookies(reply, dependencies.secureCookies);
+    reply.header("cache-control", "no-store");
     return reply.code(204).send();
   });
 
@@ -382,15 +707,23 @@ export function registerAuthRoutes(
       );
     }
 
-    const transaction = dependencies.transactionStore.create(returnTo, dependencies.now());
-    const codeChallenge = createCodeChallenge(transaction.codeVerifier);
+    const existingBinding = getCookie(request.headers.cookie, OAUTH_BROWSER_BINDING_COOKIE_NAME);
+    const browserBinding = existingBinding ?? randomToken();
+    const transaction = await dependencies.transactionStore.create(
+      returnTo,
+      browserBinding,
+      dependencies.now(),
+    );
     const authorizationUrl = provider.createAuthorizationUrl({
       clientId,
       redirectUri,
       state: transaction.state,
       nonce: transaction.nonce,
-      codeChallenge,
+      codeChallenge: createCodeChallenge(transaction.codeVerifier),
     });
+    if (existingBinding === undefined) {
+      setOAuthBindingCookie(reply, browserBinding, dependencies.secureCookies);
+    }
     return reply.redirect(authorizationUrl);
   });
 
@@ -398,8 +731,11 @@ export function registerAuthRoutes(
     const state = readQueryString(request.query, "state");
     const code = readQueryString(request.query, "code");
     const providerError = readQueryString(request.query, "error");
+    const browserBinding = getCookie(request.headers.cookie, OAUTH_BROWSER_BINDING_COOKIE_NAME);
     const transaction =
-      state === undefined ? null : dependencies.transactionStore.consume(state, dependencies.now());
+      state === undefined || browserBinding === undefined
+        ? null
+        : await dependencies.transactionStore.consume(state, browserBinding, dependencies.now());
 
     if (state === undefined || transaction === null) {
       return sendApiError(
@@ -455,7 +791,7 @@ export function registerAuthRoutes(
       return sendApiError(reply, 403, "AUTH_LOGIN_FAILED", "Google sign-in was not accepted.");
     }
 
-    const currentSession = getActiveSession(request, dependencies);
+    const currentSession = await getActiveSession(request, dependencies);
     const resolution = await dependencies.userDirectory.resolveGoogleIdentity(identity);
     if (resolution.kind !== "authenticated") {
       return sendApiError(reply, 403, "AUTH_LOGIN_FAILED", "Google sign-in was not accepted.");
@@ -469,8 +805,8 @@ export function registerAuthRoutes(
 
     const session =
       currentSession === null
-        ? dependencies.sessionStore.create(resolution.principal, dependencies.now())
-        : dependencies.sessionStore.rotate(
+        ? await dependencies.sessionStore.create(resolution.principal, dependencies.now())
+        : await dependencies.sessionStore.rotate(
             currentSession.sessionId,
             resolution.principal,
             dependencies.now(),
@@ -484,15 +820,16 @@ export function registerAuthRoutes(
   });
 
   server.get("/api/v1/me/access", async (request, reply) => {
-    const session = getActiveSession(request, dependencies);
+    const session = await getActiveSession(request, dependencies);
     if (session === null) {
       return sendApiError(reply, 401, "AUTHENTICATION_REQUIRED", "Authentication is required.");
     }
+    reply.header("cache-control", "no-store");
     return reply.send(createSuccessResponse({ userId: session.principal.userId }));
   });
 
   server.get("/api/v1/staff/access", async (request, reply) => {
-    const session = getActiveSession(request, dependencies);
+    const session = await getActiveSession(request, dependencies);
     if (session === null) {
       return sendApiError(reply, 401, "AUTHENTICATION_REQUIRED", "Authentication is required.");
     }
@@ -502,13 +839,14 @@ export function registerAuthRoutes(
     if (!canUseStaffWorkspace) {
       return sendApiError(reply, 403, "FORBIDDEN", "Staff permission is required.");
     }
+    reply.header("cache-control", "no-store");
     return reply.send(
       createSuccessResponse({ userId: session.principal.userId, audience: "staff" }),
     );
   });
 
   server.get("/api/v1/admin/access", async (request, reply) => {
-    const session = getActiveSession(request, dependencies);
+    const session = await getActiveSession(request, dependencies);
     if (session === null) {
       return sendApiError(reply, 401, "AUTHENTICATION_REQUIRED", "Authentication is required.");
     }
@@ -518,6 +856,7 @@ export function registerAuthRoutes(
     ) {
       return sendApiError(reply, 403, "FORBIDDEN", "Admin permission is required.");
     }
+    reply.header("cache-control", "no-store");
     return reply.send(
       createSuccessResponse({ userId: session.principal.userId, audience: "admin" }),
     );
@@ -531,21 +870,26 @@ export function sendApiError(
   message: string,
 ): FastifyReply {
   reply.header("cache-control", "no-store");
-  return reply.code(statusCode).send({ error: { code, message } });
+  return reply.code(statusCode).send({
+    error: { code, message, requestId: reply.request.id },
+  });
 }
 
-function getActiveSession(
+async function getActiveSession(
   request: FastifyRequest,
   dependencies: AuthBoundaryDependencies,
-): SessionRecord | null {
+): Promise<SessionRecord | null> {
   const sessionId = getCookie(request.headers.cookie, SESSION_COOKIE_NAME);
   if (sessionId === undefined) {
     return null;
   }
 
-  const session = dependencies.sessionStore.get(sessionId, dependencies.now());
-  if (session === null || session.principal.status === "disabled") {
-    dependencies.sessionStore.revoke(sessionId);
+  const session = await dependencies.sessionStore.get(sessionId, dependencies.now());
+  if (session === null) {
+    return null;
+  }
+  if (session.principal.status === "disabled") {
+    await dependencies.sessionStore.revoke(sessionId);
     return null;
   }
   return session;
@@ -557,6 +901,19 @@ function setSessionCookies(reply: FastifyReply, session: SessionRecord, secure: 
     `${SESSION_COOKIE_NAME}=${encodeURIComponent(session.sessionId)}; HttpOnly; ${attributes.join("; ")}`,
     `${CSRF_COOKIE_NAME}=${encodeURIComponent(session.csrfToken)}; ${attributes.join("; ")}`,
   ]);
+}
+
+function setOAuthBindingCookie(reply: FastifyReply, binding: string, secure: boolean): void {
+  const attributes = [
+    `Path=/`,
+    `SameSite=Lax`,
+    `Max-Age=${OAUTH_TRANSACTION_TIMEOUT_MS / 1_000}`,
+    ...(secure ? [`Secure`] : []),
+  ];
+  reply.header(
+    "set-cookie",
+    `${OAUTH_BROWSER_BINDING_COOKIE_NAME}=${encodeURIComponent(binding)}; HttpOnly; ${attributes.join("; ")}`,
+  );
 }
 
 function clearSessionCookies(reply: FastifyReply, secure: boolean): void {
@@ -641,4 +998,12 @@ function createCodeChallenge(codeVerifier: string): string {
 
 function randomToken(): string {
   return randomBytes(32).toString("base64url");
+}
+
+function isRoleCode(value: string): value is RoleCode {
+  return value === "participant" || value === "staff" || value === "admin";
+}
+
+function isPrismaUniqueConstraintError(error: unknown): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
 }

@@ -3,9 +3,11 @@ import { PrismaClient, UserStatus } from "@prisma/client";
 import { describe, expect, it } from "vitest";
 import { seed } from "../../packages/db/prisma/seed";
 
-const databaseTests = process.env.DATABASE_URL === undefined ? describe.skip : describe;
+if (process.env.DATABASE_URL === undefined || process.env.DATABASE_URL.trim() === "") {
+  throw new Error("DATABASE_URL is required for PostgreSQL integration tests.");
+}
 
-databaseTests("synthetic seed lifecycle", () => {
+describe("synthetic seed lifecycle", () => {
   it("does not reactivate a disabled account when rerun", async () => {
     const prisma = new PrismaClient();
     const userId = randomUUID();
