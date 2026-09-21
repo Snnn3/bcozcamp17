@@ -8,10 +8,12 @@ import {
   registerAuthRoutes,
   type AuthBoundaryOptions,
 } from "./auth.js";
+import { createCampSettingsReadinessCheck, type ReadinessCheck } from "./readiness.js";
 import { registerHealthRoute } from "./routes/health.js";
 
 export interface BuildServerOptions {
   auth?: AuthBoundaryOptions;
+  readinessCheck?: ReadinessCheck;
 }
 
 export async function buildServer(options: BuildServerOptions = {}): Promise<FastifyInstance> {
@@ -25,7 +27,6 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     origin: env.webOrigins,
     credentials: true,
   });
-  await registerHealthRoute(server);
   const googleProvider =
     options.auth?.googleProvider ??
     createGoogleOidcProvider(env.googleClientId, env.googleClientSecret);
@@ -38,8 +39,18 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     canCreateDefaultDatabase && env.databaseUrl !== undefined
       ? createDatabaseClient(env.databaseUrl)
       : undefined;
+  const readinessDatabase = options.auth?.prisma ?? ownedPrisma;
+  const readinessCheck =
+    options.readinessCheck ??
+    (readinessDatabase === undefined
+      ? undefined
+      : createCampSettingsReadinessCheck(readinessDatabase));
 
   try {
+    if (readinessCheck !== undefined) {
+      await readinessCheck();
+    }
+    await registerHealthRoute(server, readinessCheck === undefined ? {} : { readinessCheck });
     registerAuthRoutes(
       server,
       createAuthBoundaryDependencies({

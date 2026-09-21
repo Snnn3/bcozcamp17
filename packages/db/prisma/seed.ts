@@ -1,4 +1,11 @@
-import { CampStatus, PrismaClient } from "@prisma/client";
+import {
+  ApplicationStatus,
+  CampStatus,
+  DocumentStatus,
+  Prisma,
+  PrismaClient,
+  UserStatus,
+} from "@prisma/client";
 import { basename, dirname } from "node:path";
 
 export const permissionSeeds = [
@@ -13,7 +20,53 @@ export const permissionSeeds = [
   { code: "permissions_manage", name: "Manage roles and permissions" },
 ] as const;
 
-const rolePermissionSeeds = {
+export const SYNTHETIC_SEED_MODE = "synthetic" as const;
+
+export interface SeedExecutionOptions {
+  mode: string | undefined;
+  nodeEnv: string | undefined;
+}
+
+export function assertSyntheticSeedAllowed(options: SeedExecutionOptions): void {
+  if (options.mode !== SYNTHETIC_SEED_MODE) {
+    throw new Error("Synthetic seed requires BCOZ_SEED_MODE=synthetic.");
+  }
+
+  if (options.nodeEnv !== "development" && options.nodeEnv !== "test") {
+    throw new Error("Synthetic seed is only allowed when NODE_ENV is development or test.");
+  }
+}
+
+export const syntheticUserSeeds = [
+  {
+    googleSubject: "seed-participant",
+    email: "participant@synthetic.example.test",
+    roleCode: "participant",
+  },
+  {
+    googleSubject: "seed-staff",
+    email: "staff@synthetic.example.test",
+    roleCode: "staff",
+  },
+  {
+    googleSubject: "seed-admin",
+    email: "admin@synthetic.example.test",
+    roleCode: "admin",
+  },
+] as const;
+
+export const syntheticDocumentTypeSeeds = [
+  {
+    code: "synthetic-student-id",
+    name: "Synthetic student ID",
+    mimeTypeCode: "application/pdf",
+    mimeTypeDescription: "Synthetic PDF for local development",
+    maxSizeBytes: 5_000_000,
+    maxReplacements: 1,
+  },
+] as const;
+
+export const rolePermissionSeeds = {
   participant: [],
   staff: [
     "application_read",
@@ -26,7 +79,18 @@ const rolePermissionSeeds = {
   admin: permissionSeeds.map(({ code }) => code),
 } as const;
 
-export async function seed(prisma: PrismaClient): Promise<void> {
+export type SeedClient = PrismaClient | Prisma.TransactionClient;
+
+export async function seed(prisma: PrismaClient, options: SeedExecutionOptions): Promise<void> {
+  assertSyntheticSeedAllowed(options);
+  await prisma.$transaction((transaction) => seedDatabase(transaction, options));
+}
+
+export async function seedDatabase(
+  prisma: SeedClient,
+  options: SeedExecutionOptions,
+): Promise<void> {
+  assertSyntheticSeedAllowed(options);
   await prisma.campSettings.upsert({
     where: { singletonKey: 1 },
     update: {},
@@ -92,6 +156,123 @@ export async function seed(prisma: PrismaClient): Promise<void> {
     }),
     skipDuplicates: true,
   });
+
+  const syntheticUsers = new Map<string, { id: string; email: string }>();
+  for (const userSeed of syntheticUserSeeds) {
+    const roleId = roleIds.get(userSeed.roleCode);
+    if (roleId === undefined) {
+      throw new Error("Seed role was not found: " + userSeed.roleCode);
+    }
+
+    const user = await prisma.user.upsert({
+      where: { googleSubject: userSeed.googleSubject },
+      update: { email: userSeed.email },
+      create: {
+        googleSubject: userSeed.googleSubject,
+        email: userSeed.email,
+        status: UserStatus.ACTIVE,
+      },
+    });
+    await prisma.userRole.upsert({
+      where: {
+        userId_roleId: {
+          userId: user.id,
+          roleId,
+        },
+      },
+      update: {},
+      create: { userId: user.id, roleId },
+    });
+    syntheticUsers.set(userSeed.roleCode, { id: user.id, email: user.email });
+  }
+
+  const participantUser = syntheticUsers.get("participant");
+  if (participantUser === undefined) {
+    throw new Error("Synthetic participant seed was not created.");
+  }
+
+  const participantProfile = await prisma.participantProfile.upsert({
+    where: { userId: participantUser.id },
+    update: {},
+    create: {
+      userId: participantUser.id,
+      fullName: "Synthetic Participant",
+      contactEmail: participantUser.email,
+      phone: "+66000000000",
+    },
+  });
+  const application = await prisma.application.upsert({
+    where: { participantId: participantProfile.id },
+    update: {},
+    create: {
+      participantId: participantProfile.id,
+      status: ApplicationStatus.DRAFT,
+      privacyNoticeVersion: "synthetic-v1",
+    },
+  });
+
+  for (const documentTypeSeed of syntheticDocumentTypeSeeds) {
+    const mimeType = await prisma.mimeType.upsert({
+      where: { code: documentTypeSeed.mimeTypeCode },
+      update: { description: documentTypeSeed.mimeTypeDescription },
+      create: {
+        code: documentTypeSeed.mimeTypeCode,
+        description: documentTypeSeed.mimeTypeDescription,
+      },
+    });
+    const documentType = await prisma.documentType.upsert({
+      where: { code: documentTypeSeed.code },
+      update: {
+        name: documentTypeSeed.name,
+        maxSizeBytes: documentTypeSeed.maxSizeBytes,
+        maxCount: 1,
+        maxReplacements: documentTypeSeed.maxReplacements,
+        replacementAllowed: true,
+        isRequired: true,
+        isActive: true,
+        displayOrder: 0,
+      },
+      create: {
+        code: documentTypeSeed.code,
+        name: documentTypeSeed.name,
+        isRequired: true,
+        maxSizeBytes: documentTypeSeed.maxSizeBytes,
+        maxCount: 1,
+        maxReplacements: documentTypeSeed.maxReplacements,
+        replacementAllowed: true,
+        isActive: true,
+        displayOrder: 0,
+      },
+    });
+    await prisma.documentTypeMimeType.upsert({
+      where: {
+        documentTypeId_mimeTypeId: {
+          documentTypeId: documentType.id,
+          mimeTypeId: mimeType.id,
+        },
+      },
+      update: {},
+      create: {
+        documentTypeId: documentType.id,
+        mimeTypeId: mimeType.id,
+      },
+    });
+    await prisma.applicationDocument.upsert({
+      where: {
+        applicationId_documentTypeId: {
+          applicationId: application.id,
+          documentTypeId: documentType.id,
+        },
+      },
+      update: {},
+      create: {
+        applicationId: application.id,
+        documentTypeId: documentType.id,
+        status: DocumentStatus.NOT_UPLOADED,
+        replacementAllowed: documentType.replacementAllowed,
+      },
+    });
+  }
 }
 
 const isDirectExecution =
@@ -101,9 +282,13 @@ const isDirectExecution =
 
 if (isDirectExecution) {
   const prisma = new PrismaClient();
+  const seedOptions: SeedExecutionOptions = {
+    mode: process.env.BCOZ_SEED_MODE,
+    nodeEnv: process.env.NODE_ENV,
+  };
 
   try {
-    await seed(prisma);
+    await seed(prisma, seedOptions);
   } finally {
     await prisma.$disconnect();
   }

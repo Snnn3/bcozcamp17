@@ -14,7 +14,13 @@ must be applied before seeding. Its PostgreSQL checks and deferred triggers are
 reviewed with the database contract documents, especially the lifecycle,
 ownership, retry, choice-membership, and immutable document-version rules.
 
-To verify a clean checkout, use an empty PostgreSQL database and run:
+To verify a clean checkout, use an empty PostgreSQL database and run `npm ci`, `npm run db:generate`, `npm run db:migrate`, and `npm run db:seed` in order. The seed creates synthetic identities, roles, permissions, one draft application, and a logical document requirement; it does not create real applicant data or upload bytes.
+
+The seed command is synthetic-only: it requires `BCOZ_SEED_MODE=synthetic` and
+`NODE_ENV=development` or `test`, and refuses production. It creates a
+synthetic Admin for local verification only. First real-Admin provisioning is a
+separate restricted, audited deployment process described in
+`docs/PROJECT_SPEC.md` section 19.
 
 ```text
 npm run db:migrate

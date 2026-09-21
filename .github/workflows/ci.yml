@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       DATABASE_URL: postgresql://bcoz:bcoz_dev_password@localhost:5432/bcozcamp17
+      BCOZ_SEED_MODE: synthetic
+      NODE_ENV: test
     services:
       postgres:
         image: postgres:16
