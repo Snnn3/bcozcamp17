@@ -16,12 +16,30 @@ export function canReadPrivateDocument(
   return hasPermission(principal, "application_read") && hasPermission(principal, "document_read");
 }
 
+export function canUploadPrivateDocument(
+  principal: AuthenticatedPrincipal,
+  ownerUserId: string,
+): boolean {
+  return (
+    principal.status === "active" && ownerUserId.trim() !== "" && principal.userId === ownerUserId
+  );
+}
+
 export function assertCanReadPrivateDocument(
   principal: AuthenticatedPrincipal,
   ownerUserId: string,
 ): void {
   if (!canReadPrivateDocument(principal, ownerUserId)) {
     throw new Error("The current principal is not authorized to access this document.");
+  }
+}
+
+export function assertCanUploadPrivateDocument(
+  principal: AuthenticatedPrincipal,
+  ownerUserId: string,
+): void {
+  if (!canUploadPrivateDocument(principal, ownerUserId)) {
+    throw new Error("The current principal is not authorized to upload this document.");
   }
 }
 

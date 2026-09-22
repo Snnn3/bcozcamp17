@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { AuthenticatedPrincipal } from "@bcoz/auth";
 import { StorageObjectReference, type PrivateObjectStorage } from "@bcoz/storage";
-import { canReadPrivateDocument } from "../../apps/server/src/policies/storage";
-import { issueAuthorizedDocumentDownload } from "../../apps/server/src/services/storage-access";
+import {
+  canReadPrivateDocument,
+  canUploadPrivateDocument,
+} from "../../apps/server/src/policies/storage";
+import {
+  issueAuthorizedDocumentDownload,
+  issueAuthorizedDocumentUpload,
+} from "../../apps/server/src/services/storage-access";
 
 const ownerUserId = "00000000-0000-0000-0000-000000000001";
 const otherUserId = "00000000-0000-0000-000000000002";
@@ -12,6 +18,12 @@ const documentReference = StorageObjectReference.immutableVersion(
   "00000000-0000-0000-000000000011",
   1,
 );
+const stagingReference = StorageObjectReference.staging(ownerUserId, "upload-intent-1");
+const uploadPolicy = {
+  maxBytes: 5_000_000,
+  allowedContentTypes: ["application/pdf"],
+  allowedExtensions: [".pdf"],
+} as const;
 
 const participant = {
   userId: ownerUserId,
@@ -33,14 +45,34 @@ const staffWithDocumentRead = {
 } satisfies AuthenticatedPrincipal;
 
 const storage: PrivateObjectStorage = {
-  createUploadUrl: async () => {
-    throw new Error("upload signing is not part of this test");
-  },
+  createUploadUrl: async ({ reference }) =>
+    "https://storage.example/upload/" + encodeURIComponent(reference.key),
   createDownloadUrl: async ({ reference }) =>
     `https://storage.example/signed/${encodeURIComponent(reference.key)}`,
 };
 
 describe("authorized private document access", () => {
+  it("issues only a short-lived upload response for the document owner", async () => {
+    const response = await issueAuthorizedDocumentUpload(storage, {
+      principal: participant,
+      ownerUserId,
+      reference: stagingReference,
+      metadata: {
+        fileName: "transcript.pdf",
+        contentType: "application/pdf",
+        sizeBytes: 1_024,
+      },
+      policy: uploadPolicy,
+      now: () => new Date("2026-09-22T00:00:00.000Z"),
+    });
+
+    expect(response).toEqual({
+      uploadUrl: expect.stringContaining("upload"),
+      expiresAt: "2026-09-22T00:05:00.000Z",
+    });
+    expect(response).not.toHaveProperty("storageKey");
+  });
+
   it("issues only a short-lived download response for the document owner", async () => {
     const response = await issueAuthorizedDocumentDownload(storage, {
       principal: participant,
@@ -87,6 +119,20 @@ describe("authorized private document access", () => {
         reference: documentReference,
       }),
     ).rejects.toThrow("not authorized");
+    expect(canUploadPrivateDocument(staffWithDocumentRead, ownerUserId)).toBe(false);
+    await expect(
+      issueAuthorizedDocumentUpload(storage, {
+        principal: staffWithDocumentRead,
+        ownerUserId,
+        reference: stagingReference,
+        metadata: {
+          fileName: "transcript.pdf",
+          contentType: "application/pdf",
+          sizeBytes: 1_024,
+        },
+        policy: uploadPolicy,
+      }),
+    ).rejects.toThrow("not authorized to upload");
   });
 
   it("denies disabled principals and explicit document-read denials", () => {
