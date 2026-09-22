@@ -104,6 +104,10 @@ Start PostgreSQL and MinIO:
 docker compose -f infra/docker-compose.yml up -d
 ```
 
+Compose creates the private bcoz-private MinIO bucket automatically. Local
+storage uses path-style requests; production storage should use a separate
+private S3-compatible bucket and server-only credentials.
+
 Generate the Prisma client, apply the development schema, and seed synthetic baseline data:
 
 ```bash

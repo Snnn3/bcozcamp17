@@ -10,6 +10,33 @@ const optionalUrl = z.preprocess(
   (value: unknown) => (value === "" ? undefined : value),
   z.string().url().optional(),
 );
+const storageEndpoint = optionalUrl.refine(
+  (value) => value === undefined || ["http:", "https:"].includes(new URL(value).protocol),
+  "STORAGE_ENDPOINT must use HTTP or HTTPS.",
+);
+const storageBucket = z
+  .string()
+  .trim()
+  .min(3)
+  .max(63)
+  .regex(/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/)
+  .refine(
+    (value) => !/^\d{1,3}(?:\.\d{1,3}){3}$/.test(value),
+    "STORAGE_BUCKET must not look like an IP address.",
+  );
+const booleanFromEnvironment = z.preprocess((value: unknown) => {
+  if (typeof value !== "string") {
+    return value;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "true") {
+    return true;
+  }
+  if (normalized === "false") {
+    return false;
+  }
+  return value;
+}, z.boolean().default(true));
 
 const environmentInputSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -17,11 +44,12 @@ const environmentInputSchema = z.object({
   WEB_ORIGINS: z.string().default("http://localhost:5173,http://localhost:5174"),
   DATABASE_URL: optionalNonEmptyString,
   SESSION_SECRET: optionalNonEmptyString,
-  STORAGE_ENDPOINT: optionalUrl,
+  STORAGE_ENDPOINT: storageEndpoint,
   STORAGE_REGION: z.string().min(1).default("us-east-1"),
-  STORAGE_BUCKET: z.string().min(1).default("bcoz-private"),
+  STORAGE_BUCKET: storageBucket.default("bcoz-private"),
   STORAGE_ACCESS_KEY_ID: optionalNonEmptyString,
   STORAGE_SECRET_ACCESS_KEY: optionalNonEmptyString,
+  STORAGE_FORCE_PATH_STYLE: booleanFromEnvironment,
   GOOGLE_CLIENT_ID: optionalNonEmptyString,
   GOOGLE_CLIENT_SECRET: optionalNonEmptyString,
   GOOGLE_REDIRECT_URI: optionalUrl,
@@ -40,6 +68,7 @@ export const environmentSchema = environmentInputSchema.transform((input) => ({
   storageBucket: input.STORAGE_BUCKET,
   storageAccessKeyId: input.STORAGE_ACCESS_KEY_ID,
   storageSecretAccessKey: input.STORAGE_SECRET_ACCESS_KEY,
+  storageForcePathStyle: input.STORAGE_FORCE_PATH_STYLE,
   googleClientId: input.GOOGLE_CLIENT_ID,
   googleClientSecret: input.GOOGLE_CLIENT_SECRET,
   googleRedirectUri: input.GOOGLE_REDIRECT_URI,
@@ -60,7 +89,21 @@ export function parseEnvironment(input: NodeJS.ProcessEnv = process.env): Enviro
     throw new Error("WEB_ORIGINS must contain at least one allowed origin.");
   }
 
+  const hasStorageAccessKey = environment.storageAccessKeyId !== undefined;
+  const hasStorageSecretKey = environment.storageSecretAccessKey !== undefined;
+  if (hasStorageAccessKey !== hasStorageSecretKey) {
+    throw new Error(
+      "STORAGE_ACCESS_KEY_ID and STORAGE_SECRET_ACCESS_KEY must be provided together.",
+    );
+  }
+
   if (environment.nodeEnv === "production") {
+    if (
+      environment.storageEndpoint !== undefined &&
+      new URL(environment.storageEndpoint).protocol !== "https:"
+    ) {
+      throw new Error("Production STORAGE_ENDPOINT must use HTTPS.");
+    }
     const missingProductionValues = [
       ["DATABASE_URL", environment.databaseUrl],
       ["SESSION_SECRET", environment.sessionSecret],
