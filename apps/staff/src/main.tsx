@@ -5,16 +5,27 @@ import {
   createRoute,
   createRouter,
   Outlet,
+  useRouterState,
   RouterProvider,
 } from "@tanstack/react-router";
 import { AppShell, PageHeading, StatusBanner } from "@bcoz/ui";
 import { StaffRouteGuard } from "./auth";
 import "./styles.css";
 
+const navItems = [
+  { label: "Home", href: "/" },
+  { label: "Applications", href: "/applications" },
+];
+
 function StaffLayout(): ReactElement {
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+
   return (
     <StaffRouteGuard>
-      <AppShell audience="staff">
+      <AppShell
+        audience="staff"
+        navItems={navItems.map((item) => ({ ...item, current: item.href === pathname }))}
+      >
         <Outlet />
       </AppShell>
     </StaffRouteGuard>
@@ -37,20 +48,29 @@ function StaffHome(): ReactElement {
   );
 }
 
+function StaffApplications(): ReactElement {
+  return (
+    <PageHeading
+      eyebrow="Applications"
+      title="Application review is not available yet"
+      description="Once Sprint 2 delivers Staff review, this page will list applications with search, filtering, pagination, and per-document review actions."
+    />
+  );
+}
+
 const rootRoute = createRootRoute({ component: StaffLayout });
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
   component: StaffHome,
 });
-const routeTree = rootRoute.addChildren([indexRoute]);
+const applicationsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/applications",
+  component: StaffApplications,
+});
+const routeTree = rootRoute.addChildren([indexRoute, applicationsRoute]);
 const router = createRouter({ routeTree });
-
-declare module "@tanstack/react-router" {
-  interface Register {
-    router: typeof router;
-  }
-}
 
 const rootElement = document.getElementById("root");
 

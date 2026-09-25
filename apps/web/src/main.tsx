@@ -5,16 +5,27 @@ import {
   createRoute,
   createRouter,
   Outlet,
+  useRouterState,
   RouterProvider,
 } from "@tanstack/react-router";
 import { AppShell, PageHeading, StatusBanner } from "@bcoz/ui";
 import { RouteGuard } from "./auth";
 import "./styles.css";
 
+const navItems = [
+  { label: "Home", href: "/" },
+  { label: "Application status", href: "/status" },
+];
+
 function ParticipantLayout(): ReactElement {
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+
   return (
     <RouteGuard audience="participant">
-      <AppShell audience="participant">
+      <AppShell
+        audience="participant"
+        navItems={navItems.map((item) => ({ ...item, current: item.href === pathname }))}
+      >
         <Outlet />
       </AppShell>
     </RouteGuard>
@@ -37,20 +48,29 @@ function ParticipantHome(): ReactElement {
   );
 }
 
+function ParticipantStatus(): ReactElement {
+  return (
+    <PageHeading
+      eyebrow="Application status"
+      title="Status tracking is not available yet"
+      description="Once Sprint 1 delivers registration, this page will show your application code, submitted documents, and any corrections a Staff reviewer has requested."
+    />
+  );
+}
+
 const rootRoute = createRootRoute({ component: ParticipantLayout });
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
   component: ParticipantHome,
 });
-const routeTree = rootRoute.addChildren([indexRoute]);
+const statusRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/status",
+  component: ParticipantStatus,
+});
+const routeTree = rootRoute.addChildren([indexRoute, statusRoute]);
 const router = createRouter({ routeTree });
-
-declare module "@tanstack/react-router" {
-  interface Register {
-    router: typeof router;
-  }
-}
 
 const rootElement = document.getElementById("root");
 
