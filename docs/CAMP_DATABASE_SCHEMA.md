@@ -42,7 +42,7 @@ There is no Leader role.
 - snake_case table and column names
 - Foreign keys for concrete relationships; polymorphic audit/result references require explicit service integrity checks
 - Private object storage for uploaded files; file contents are not stored in PostgreSQL
-- Authentication-provider account/session tables may be managed outside this schema
+- Google provider-account tokens are not stored in this schema. The application-owned local session and browser-bound OAuth transaction tables are included below and are managed by Prisma migrations.
 - Repeating and multi-value business data uses child or junction tables, not comma-separated values or JSONB
 - Previous document versions and review decisions are retained
 - camp_settings contains exactly one row, enforced by the seed/migration and application startup check
@@ -68,6 +68,7 @@ application_documents.status and application_documents.applicant_message are int
 erDiagram
     USERS ||--o| PARTICIPANT_PROFILES : owns
     USERS ||--o{ USER_ROLES : has
+    USERS ||--o{ AUTH_SESSIONS : owns
     ROLES ||--o{ USER_ROLES : assigns
     ROLES ||--o{ ROLE_PERMISSIONS : grants
     PERMISSIONS ||--o{ ROLE_PERMISSIONS : contains
@@ -148,6 +149,7 @@ Stores the configuration for the one camp. The database must contain exactly one
 | Column | Type | Rules |
 |---|---|---|
 | id | uuid | Primary key; exactly one seeded row |
+| singleton_key | smallint | Required, unique, CHECK = 1 |
 | name | varchar(255) | Required |
 | status | varchar(30) | Required camp status |
 | timezone | varchar(64) | Required IANA timezone |
@@ -157,12 +159,18 @@ Stores the configuration for the one camp. The database must contain exactly one
 | correction_closes_at | timestamptz | Optional |
 | starts_at | timestamptz | Required |
 | ends_at | timestamptz | Required, after start |
+| version | integer | Required, positive configuration revision |
+| privacy_notice_version | varchar(50) | Required published notice version |
+| privacy_notice_url | text | Optional published notice URL |
 | created_at | timestamptz | Required |
 | updated_at | timestamptz | Required |
 
 ### users
 
-Stores local identities authenticated by Google. Sessions and provider-account bookkeeping use the selected auth library's migrations; there are no local password credentials.
+Stores local identities authenticated by Google. Local sessions and browser-bound
+OAuth transactions are application-owned tables managed by Prisma migrations;
+Google provider-account tokens are not stored. There are no local password
+credentials.
 
 | Column | Type | Rules |
 |---|---|---|
@@ -172,6 +180,43 @@ Stores local identities authenticated by Google. Sessions and provider-account b
 | status | varchar(30) | Required user status |
 | created_at | timestamptz | Required |
 | updated_at | timestamptz | Required |
+
+### auth_sessions
+
+Stores opaque server-managed local sessions after Google identity verification.
+The browser never receives the database row or the session identifier in an API
+response. Sessions expire by idle and absolute lifetime and reference the local
+user, not a Google access token.
+
+| Column | Type | Rules |
+|---|---|---|
+| id | varchar(128) | Primary key; opaque session identifier |
+| user_id | uuid | FK to users |
+| csrf_token | varchar(128) | Required server-generated token |
+| created_at | timestamptz | Required |
+| last_seen_at | timestamptz | Required |
+| expires_at | timestamptz | Required idle expiry |
+| absolute_expires_at | timestamptz | Required hard expiry |
+
+Indexes on `user_id` and `expires_at` support revocation and cleanup.
+
+### auth_oauth_transactions
+
+Stores short-lived browser-bound Google authorization transactions. It stores
+only the state, nonce, PKCE verifier, and an exact allowlisted return destination;
+provider access or refresh tokens are not persisted.
+
+| Column | Type | Rules |
+|---|---|---|
+| state | varchar(128) | Primary key; single-use |
+| browser_binding | varchar(128) | Required browser binding |
+| nonce | varchar(128) | Required single-use nonce |
+| code_verifier | varchar(128) | Required PKCE verifier |
+| return_to | text | Required exact allowed frontend destination |
+| created_at | timestamptz | Required |
+| expires_at | timestamptz | Required; default transaction lifetime 10 minutes |
+
+An expired or consumed transaction cannot be reused.
 
 ### roles
 
@@ -303,7 +348,7 @@ Stores one application per participant.
 | version | integer | Required, starts at 1 |
 | submitted_at | timestamptz | Optional until submission |
 | correction_deadline | timestamptz | Optional; if null, inherit camp_settings |
-| privacy_notice_version | varchar(50) | Required before final submission |
+| privacy_notice_version | varchar(50) | Required configuration snapshot and before final submission |
 | privacy_acknowledged_at | timestamptz | Required before final submission |
 | created_at | timestamptz | Required |
 | updated_at | timestamptz | Required |
@@ -418,7 +463,7 @@ Represents one logical required document for one application and stores its curr
 | application_id | uuid | FK to applications |
 | document_type_id | uuid | FK to document_types |
 | status | varchar(30) | Required document status |
-| applicant_message | text | Nullable; visible to applicant when action is required |
+| applicant_message | text | Required stored text; nonblank when action is required |
 | replacement_allowed | boolean | Required |
 | current_submission_id | uuid | Nullable FK to document_submissions |
 | created_at | timestamptz | Required |
@@ -463,8 +508,8 @@ Stores every Staff/Admin decision for a document version.
 | application_document_id | uuid | FK to application_documents |
 | submission_id | uuid | FK to document_submissions |
 | reviewer_id | uuid | FK to users |
-| status | varchar(30) | approved, correction_required, or rejected |
-| applicant_message | text | Required for failed statuses |
+| status | varchar(30) | approved, correction_required, or rejected; backed by the dedicated Prisma review-status enum |
+| applicant_message | text | Required stored text; nonblank for correction_required or rejected |
 | internal_note | text | Optional; Staff/Admin only |
 | created_at | timestamptz | Required |
 
@@ -781,8 +826,8 @@ Unique `(actor_id, operation_scope, key)`; index expires_at. Record only committ
 The selected provider integration is Google's `google-auth-library`; it verifies
 provider tokens but does not own local application sessions. The application
 therefore owns the append-only Prisma migration for `auth_sessions` and
-`auth_oauth_transactions`, which are intentionally outside this domain DBML.
-Those migrations must be applied and verified alongside the domain migration.
+`auth_oauth_transactions`, which are included in this domain DBML and must be
+applied and verified alongside the domain migration.
 Do not build a second password/session system merely because these tables are
 absent from this diagram.
 

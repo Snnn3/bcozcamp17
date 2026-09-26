@@ -13,7 +13,8 @@ validation.
 The adapter accepts only server-issued references, verifies the owner scope,
 validates the declared file name, MIME type, extension, and size against a
 document policy, and creates short-lived signed URLs. Upload URLs are capped at
-five minutes and download URLs at one minute by default and maximum.
+ten minutes and download URLs at one minute by default and maximum, matching the
+API contract.
 
 The adapter does not decide application ownership or Staff permissions. The
 server policy/service layer must authorize the principal before calling it.

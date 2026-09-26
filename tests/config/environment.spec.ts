@@ -80,4 +80,62 @@ describe("environment setup", () => {
       }),
     ).toThrow();
   });
+
+  it("normalizes exact browser origins and rejects paths", () => {
+    expect(
+      parseEnvironment({
+        ...process.env,
+        WEB_ORIGINS: "http://localhost:5173/",
+      }).webOrigins,
+    ).toEqual(["http://localhost:5173"]);
+    expect(() =>
+      parseEnvironment({
+        ...process.env,
+        WEB_ORIGINS: "http://localhost:5173/app",
+      }),
+    ).toThrow("exact origins");
+    for (const unsafeOrigin of [
+      "http://localhost:5173?tab=home",
+      "http://localhost:5173#fragment",
+      "http://user:secret@localhost:5173",
+      "//localhost:5173",
+    ]) {
+      expect(() => parseEnvironment({ ...process.env, WEB_ORIGINS: unsafeOrigin })).toThrow();
+    }
+  });
+
+  it("requires explicit HTTPS origins and virtual-hosted storage in production", () => {
+    expect(() =>
+      parseEnvironment({
+        ...process.env,
+        NODE_ENV: "production",
+        STORAGE_FORCE_PATH_STYLE: "true",
+        WEB_ORIGINS: "https://app.example.test",
+      }),
+    ).toThrow("explicitly false");
+    expect(() =>
+      parseEnvironment({
+        ...process.env,
+        NODE_ENV: "production",
+        STORAGE_FORCE_PATH_STYLE: "false",
+        WEB_ORIGINS: "http://app.example.test",
+      }),
+    ).toThrow("WEB_ORIGINS must use HTTPS");
+  });
+
+  it("rejects storage endpoint credentials and whitespace-only secrets centrally", () => {
+    expect(() =>
+      parseEnvironment({
+        ...process.env,
+        STORAGE_ENDPOINT: "https://user:secret@storage.example.test",
+      }),
+    ).toThrow("STORAGE_ENDPOINT");
+    expect(() =>
+      parseEnvironment({
+        ...process.env,
+        STORAGE_ACCESS_KEY_ID: "   ",
+        STORAGE_SECRET_ACCESS_KEY: "secret",
+      }),
+    ).toThrow("provided together");
+  });
 });

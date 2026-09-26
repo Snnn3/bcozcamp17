@@ -39,6 +39,20 @@ describe("private storage authorization boundary", () => {
     });
 
     expect(url).toContain("upload-intent-1");
+    expect(url).toContain("X-Amz-Expires=600");
+    await expect(
+      storage.createUploadUrl({
+        reference,
+        ownerUserId,
+        metadata: {
+          fileName: "transcript.pdf",
+          contentType: "application/pdf",
+          sizeBytes: 1_024,
+        },
+        policy: uploadPolicy,
+        expiresInSeconds: 601,
+      }),
+    ).rejects.toThrow("between 1 and 600 seconds");
     await expect(
       storage.createUploadUrl({
         reference,

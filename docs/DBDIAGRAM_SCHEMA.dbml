@@ -70,7 +70,7 @@ Table camp_settings {
   id uuid [pk, note: 'Exactly one row for this one-time camp']
   singleton_key smallint [not null, unique, default: 1, note: 'SQL CHECK = 1; runtime role cannot delete singleton']
   version int [not null, default: 1]
-  privacy_notice_version varchar(50)
+  privacy_notice_version varchar(50) [not null, note: 'Published version required before registration opens']
   privacy_notice_url text
   name varchar(255) [not null]
   status camp_status [not null]
@@ -92,6 +92,37 @@ Table users {
   status user_status [not null]
   created_at timestamptz [not null]
   updated_at timestamptz [not null]
+}
+
+// The application owns local sessions and browser-bound OAuth transactions.
+// Google provider account tokens are not stored in this domain schema.
+Table auth_sessions {
+  id varchar(128) [pk]
+  user_id uuid [not null]
+  csrf_token varchar(128) [not null]
+  created_at timestamptz [not null]
+  last_seen_at timestamptz [not null]
+  expires_at timestamptz [not null]
+  absolute_expires_at timestamptz [not null]
+
+  indexes {
+    (user_id)
+    (expires_at)
+  }
+}
+
+Table auth_oauth_transactions {
+  state varchar(128) [pk]
+  browser_binding varchar(128) [not null]
+  nonce varchar(128) [not null]
+  code_verifier varchar(128) [not null]
+  return_to text [not null]
+  created_at timestamptz [not null]
+  expires_at timestamptz [not null]
+
+  indexes {
+    (expires_at)
+  }
 }
 
 Table roles {
@@ -181,7 +212,7 @@ Table applications {
   version int [not null, note: 'Starts at 1']
   submitted_at timestamptz
   correction_deadline timestamptz
-  privacy_notice_version varchar(50)
+  privacy_notice_version varchar(50) [not null, note: 'Configuration snapshot']
   privacy_acknowledged_at timestamptz
   created_at timestamptz [not null]
   updated_at timestamptz [not null]
@@ -304,7 +335,7 @@ Table document_review_history {
   submission_id uuid [not null]
   reviewer_id uuid [not null]
   status document_review_status [not null]
-  applicant_message text [note: 'Required for correction_required and rejected']
+  applicant_message text [not null, note: 'Stored text; nonblank for correction_required and rejected']
   internal_note text [note: 'Never exposed to applicants']
   created_at timestamptz [not null]
 
@@ -382,6 +413,7 @@ Ref: user_permissions.user_id > users.id
 Ref: user_permissions.permission_id > permissions.id
 Ref: user_permissions.granted_by > users.id
 Ref: participant_profiles.user_id - users.id
+Ref: auth_sessions.user_id > users.id
 
 Ref: application_field_options.field_id > application_fields.id
 Ref: applications.participant_id > participant_profiles.id
@@ -396,11 +428,11 @@ Ref: document_type_mime_types.document_type_id > document_types.id
 Ref: document_type_mime_types.mime_type_id > mime_types.id
 Ref: application_documents.application_id > applications.id
 Ref: application_documents.document_type_id > document_types.id
-Ref: application_documents.current_submission_id - document_submissions.id
+Ref: application_documents.(id, current_submission_id) - document_submissions.(application_document_id, id)
 Ref: document_submissions.application_document_id > application_documents.id
 Ref: document_submissions.uploaded_by > users.id
 Ref: document_review_history.application_document_id > application_documents.id
-Ref: document_review_history.submission_id > document_submissions.id
+Ref: document_review_history.(application_document_id, submission_id) > document_submissions.(application_document_id, id)
 Ref: document_review_history.reviewer_id > users.id
 
 Ref: in_app_notifications.user_id > users.id
@@ -412,7 +444,7 @@ Ref: notification_documents.application_document_id > application_documents.id
 Ref: audit_logs.actor_id > users.id
 Ref: audit_log_values.audit_log_id > audit_logs.id
 
-Enum upload_status {
+Enum upload_intent_status {
   issued
   validating
   completed
@@ -431,7 +463,7 @@ Table upload_intents {
   original_filename varchar(255) [not null]
   declared_mime_type varchar(100) [not null]
   declared_size_bytes bigint [not null]
-  status upload_status [not null]
+  status upload_intent_status [not null]
   failure_code varchar(100)
   result_submission_id uuid [unique]
   created_at timestamptz [not null]
@@ -442,6 +474,7 @@ Table upload_intents {
   indexes {
     (status, expires_at)
     (uploaded_by, status)
+    (application_document_id, result_submission_id) [unique]
   }
 }
 
@@ -467,7 +500,7 @@ Table idempotency_records {
 
 Ref: upload_intents.application_document_id > application_documents.id
 Ref: upload_intents.uploaded_by > users.id
-Ref: upload_intents.result_submission_id - document_submissions.id
+Ref: upload_intents.(application_document_id, result_submission_id) - document_submissions.(application_document_id, id)
 Ref: idempotency_records.actor_id > users.id
 
 // Migration constraints/triggers in CAMP_DATABASE_SCHEMA.md section 15 are mandatory:
