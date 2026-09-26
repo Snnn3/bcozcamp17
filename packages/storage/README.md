@@ -1,8 +1,22 @@
 # Private storage package
 
-This package is server-only. Authorized application services issue
-`StorageObjectReference` values for staging uploads and immutable document
-versions. The adapter accepts only those references, verifies the owner scope,
-and creates short-lived signed URLs (five minutes for uploads and one minute
-for downloads by default and maximum). Browser applications must never receive
-permanent storage credentials or raw storage keys.
+This package is server-only and provider-agnostic. It uses the AWS S3 client
+interface for local MinIO and production-compatible providers such as
+Cloudflare R2 or Amazon S3.
+
+StorageObjectReference values are issued by server-side services for staging
+uploads and immutable document versions. Staging keys are scoped to the owner
+and upload intent. Immutable keys include the owner, logical document,
+submission, and version number; they must never be overwritten after
+validation.
+
+The adapter accepts only server-issued references, verifies the owner scope,
+validates the declared file name, MIME type, extension, and size against a
+document policy, and creates short-lived signed URLs. Upload URLs are capped at
+five minutes and download URLs at one minute by default and maximum.
+
+The adapter does not decide application ownership or Staff permissions. The
+server policy/service layer must authorize the principal before calling it.
+The dedicated access response contains only downloadUrl and expiresAt;
+browser applications must never receive permanent storage credentials or raw
+storage keys.

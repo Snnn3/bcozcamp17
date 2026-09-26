@@ -52,4 +52,32 @@ describe("environment setup", () => {
     expect(environment.googleClientSecret).toBeUndefined();
     expect(environment.googleRedirectUri).toBeUndefined();
   });
+
+  it("parses storage path-style configuration without treating false as true", () => {
+    const environment = parseEnvironment({
+      ...process.env,
+      STORAGE_FORCE_PATH_STYLE: "false",
+    });
+
+    expect(environment.storageForcePathStyle).toBe(false);
+  });
+
+  it("requires storage credentials to be supplied as a pair", () => {
+    expect(() =>
+      parseEnvironment({
+        ...process.env,
+        STORAGE_ACCESS_KEY_ID: "only-access-key",
+        STORAGE_SECRET_ACCESS_KEY: "",
+      }),
+    ).toThrow("provided together");
+  });
+
+  it("rejects unsafe storage bucket names", () => {
+    expect(() =>
+      parseEnvironment({
+        ...process.env,
+        STORAGE_BUCKET: "Bcoz Private",
+      }),
+    ).toThrow();
+  });
 });
