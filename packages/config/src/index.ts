@@ -104,6 +104,9 @@ export function parseEnvironment(input: NodeJS.ProcessEnv = process.env): Enviro
   }
 
   if (environment.nodeEnv === "production") {
+    if (input.WEB_ORIGINS === undefined) {
+      throw new Error("Production WEB_ORIGINS must be explicitly configured.");
+    }
     if (input.STORAGE_FORCE_PATH_STYLE?.trim().toLowerCase() !== "false") {
       throw new Error("Production STORAGE_FORCE_PATH_STYLE must be explicitly false.");
     }
@@ -137,36 +140,40 @@ export function parseEnvironment(input: NodeJS.ProcessEnv = process.env): Enviro
 }
 
 function parseWebOrigins(value: string): string[] {
-  const origins = value
-    .split(",")
-    .map((origin) => origin.trim())
-    .filter((origin) => origin.length > 0)
-    .map((origin) => {
-      if (origin.includes("?") || origin.includes("#")) {
-        throw new Error("WEB_ORIGINS must contain exact origins without paths or credentials.");
-      }
-      let parsed: URL;
-      try {
-        parsed = new URL(origin);
-      } catch {
-        throw new Error("WEB_ORIGINS must contain valid exact origins.");
-      }
-      if (
-        parsed.username !== "" ||
-        parsed.password !== "" ||
-        parsed.pathname !== "/" ||
-        parsed.search !== "" ||
-        parsed.hash !== ""
-      ) {
-        throw new Error("WEB_ORIGINS must contain exact origins without paths or credentials.");
-      }
-      return parsed.origin;
-    });
+  const origins = value.split(",").map((origin) => origin.trim());
+  if (origins.some((origin) => origin.length === 0)) {
+    throw new Error("WEB_ORIGINS must not contain empty entries.");
+  }
 
-  if (origins.length === 0) {
+  const parsedOrigins = origins.map((origin) => {
+    if (origin.includes("?") || origin.includes("#")) {
+      throw new Error("WEB_ORIGINS must contain exact origins without paths or credentials.");
+    }
+    let parsed: URL;
+    try {
+      parsed = new URL(origin);
+    } catch {
+      throw new Error("WEB_ORIGINS must contain valid exact origins.");
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error("WEB_ORIGINS must use HTTP or HTTPS.");
+    }
+    if (
+      parsed.username !== "" ||
+      parsed.password !== "" ||
+      parsed.pathname !== "/" ||
+      parsed.search !== "" ||
+      parsed.hash !== ""
+    ) {
+      throw new Error("WEB_ORIGINS must contain exact origins without paths or credentials.");
+    }
+    return parsed.origin;
+  });
+
+  if (parsedOrigins.length === 0) {
     throw new Error("WEB_ORIGINS must contain at least one allowed origin.");
   }
-  return [...new Set(origins)];
+  return [...new Set(parsedOrigins)];
 }
 
 loadEnvironmentFile();
