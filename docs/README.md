@@ -10,3 +10,4 @@ contribution contracts for BCOZ Camp 17.
 - [TEST_SPEC.md](TEST_SPEC.md) — acceptance, security, responsive, and performance coverage
 - [CONTEXT.md](CONTEXT.md) — domain language and project context
 - [CONTRIBUTING.md](CONTRIBUTING.md) — coding, testing, and review rules
+- [UI_TEST_MATRIX.md](UI_TEST_MATRIX.md) — provisional responsive viewport and browser matrix for shell work (pending S0-01)

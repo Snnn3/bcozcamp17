@@ -41,6 +41,7 @@
     "tests/**/*.tsx",
     "*.config.ts",
     "*.config.mjs",
+    "vitest.setup.ts",
     "scripts/**/*.mjs"
   ],
   "exclude": ["node_modules", "dist", "coverage", "playwright-report", "test-results"]
