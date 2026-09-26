@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, setup]
+    branches: [main]
   pull_request:
 
 permissions:
@@ -12,12 +12,14 @@ jobs:
   quality:
     runs-on: ubuntu-latest
     env:
-      DATABASE_URL: postgresql://bcoz:bcoz_dev_password@localhost:5432/bcozcamp17
+      DATABASE_URL: postgresql://bcoz:bcoz_dev_password@localhost:5432/bcozcamp17?schema=public
       BCOZ_SEED_MODE: synthetic
       NODE_ENV: test
+      WEB_ORIGINS: http://localhost:5173,http://localhost:5174
+      STORAGE_FORCE_PATH_STYLE: "true"
     services:
       postgres:
-        image: postgres:16
+        image: postgres:17-alpine
         env:
           POSTGRES_USER: bcoz
           POSTGRES_PASSWORD: bcoz_dev_password

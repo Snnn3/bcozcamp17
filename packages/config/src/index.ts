@@ -104,6 +104,9 @@ export function parseEnvironment(input: NodeJS.ProcessEnv = process.env): Enviro
   }
 
   if (environment.nodeEnv === "production") {
+    if (input.WEB_ORIGINS === undefined) {
+      throw new Error("Production WEB_ORIGINS must be explicitly configured.");
+    }
     if (input.STORAGE_FORCE_PATH_STYLE?.trim().toLowerCase() !== "false") {
       throw new Error("Production STORAGE_FORCE_PATH_STYLE must be explicitly false.");
     }
