@@ -6,8 +6,10 @@ import {
   createAuthBoundaryDependencies,
   createGoogleOidcProvider,
   registerAuthRoutes,
+  sendApiError,
   type AuthBoundaryOptions,
 } from "./auth.js";
+import { DependencyUnavailableError } from "@bcoz/api";
 import { createCampSettingsReadinessCheck, type ReadinessCheck } from "./readiness.js";
 import { registerHealthRoute } from "./routes/health.js";
 
@@ -21,6 +23,19 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     logger: {
       level: env.nodeEnv === "development" ? "info" : "warn",
     },
+  });
+
+  server.setErrorHandler((error: unknown, request, reply) => {
+    const isDependencyFailure = error instanceof DependencyUnavailableError;
+    request.log.error(isDependencyFailure ? "Dependency unavailable" : "Unhandled request error");
+    return sendApiError(
+      reply,
+      isDependencyFailure ? 503 : 500,
+      isDependencyFailure ? "DEPENDENCY_UNAVAILABLE" : "INTERNAL_ERROR",
+      isDependencyFailure
+        ? "A required service is temporarily unavailable."
+        : "An unexpected error occurred.",
+    );
   });
 
   await server.register(cors, {

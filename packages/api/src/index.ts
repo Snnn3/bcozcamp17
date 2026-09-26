@@ -1,4 +1,9 @@
 import { z } from "zod";
+import {
+  idempotencyKeySchema,
+  positiveVersionSchema,
+  uploadIntentStatusSchema,
+} from "@bcoz/validation";
 
 export { healthResponseSchema } from "@bcoz/validation";
 
@@ -39,23 +44,36 @@ export const apiErrorCodeSchema = z.enum([
 
 export type ApiErrorCode = z.infer<typeof apiErrorCodeSchema>;
 
-export const fieldErrorSchema = z.object({
-  field: z.string().min(1),
-  message: z.string().min(1),
-});
+export const fieldErrorSchema = z
+  .object({
+    field: z.string().min(1),
+    message: z.string().min(1),
+  })
+  .strict();
 
-export const apiErrorSchema = z.object({
-  code: apiErrorCodeSchema,
-  message: z.string().min(1),
-  fieldErrors: z.array(fieldErrorSchema).optional(),
-  requestId: z.string().min(1).optional(),
-});
+export const apiErrorSchema = z
+  .object({
+    code: apiErrorCodeSchema,
+    message: z.string().min(1),
+    fieldErrors: z.array(fieldErrorSchema).optional(),
+    requestId: z.string().min(1),
+  })
+  .strict();
 
-export const apiErrorResponseSchema = z.object({
-  error: apiErrorSchema,
-});
+export const apiErrorResponseSchema = z
+  .object({
+    error: apiErrorSchema,
+  })
+  .strict();
 
 export type ApiErrorResponse = z.infer<typeof apiErrorResponseSchema>;
+
+export class DependencyUnavailableError extends Error {
+  public constructor(message = "A required service is temporarily unavailable.") {
+    super(message);
+    this.name = "DependencyUnavailableError";
+  }
+}
 
 export interface ApiSuccessResponse<TData> {
   data: TData;
@@ -68,3 +86,47 @@ export function createSuccessResponse<TData>(
 ): ApiSuccessResponse<TData> {
   return meta === undefined ? { data } : { data, meta };
 }
+
+export const uploadIntentRequestSchema = z
+  .object({
+    fileName: z.string().min(1).max(255),
+    contentType: z.string().min(1).max(100),
+    sizeBytes: z.number().int().positive().safe(),
+    expectedDocumentVersion: positiveVersionSchema,
+    configurationVersion: positiveVersionSchema,
+  })
+  .strict();
+
+export const uploadIntentResponseSchema = z
+  .object({
+    uploadId: z.string().uuid(),
+    method: z.literal("PUT"),
+    uploadUrl: z.string().url(),
+    requiredHeaders: z
+      .object({
+        "Content-Type": z.string().min(1),
+      })
+      .strict(),
+    expiresAt: z.string().datetime({ offset: true }),
+    documentVersion: positiveVersionSchema,
+    status: uploadIntentStatusSchema,
+  })
+  .strict();
+
+export const completeDocumentUploadRequestSchema = z
+  .object({
+    checksum: z
+      .string()
+      .regex(/^sha256:[\x21-\x7e]+$/)
+      .optional(),
+  })
+  .strict();
+
+export const authorizedDocumentAccessResponseSchema = z
+  .object({
+    downloadUrl: z.string().url(),
+    expiresAt: z.string().datetime({ offset: true }),
+  })
+  .strict();
+
+export { idempotencyKeySchema };

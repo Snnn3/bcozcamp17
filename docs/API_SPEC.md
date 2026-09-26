@@ -38,6 +38,19 @@ Cookie: session=<secure-session-cookie>
 
 For direct file upload, the client uses the short-lived URL returned by the API. It must not send permanent storage credentials to the browser.
 
+The browser `Origin` is validated as an exact origin: scheme, host, and port
+must match the configured allowlist. Paths, queries, fragments, credentials,
+protocol-relative values, and alternate ports are rejected. Production
+allowlisted origins must use HTTPS; local development may use HTTP localhost
+origins.
+
+Google login initiation and callback are rate-limited independently. The
+development baseline is 10 initiation requests and 20 callback requests per
+minute per client IP; production may use a stricter centrally configured limit.
+An exceeded limit returns `429` with `error.code = RATE_LIMITED`, a safe message,
+a request ID, and a numeric `Retry-After` header. The limiter must be shared or
+otherwise coordinated across API instances before production launch.
+
 For submission, upload completion, review, and final decision operations, the client must send:
 
 ```http
@@ -99,8 +112,9 @@ The `message` must be safe for the target user. Stack traces, SQL errors, storag
 | 413 | File or request is too large |
 | 415 | File type is not allowed |
 | 422 | Valid request shape but business validation failed |
-| 429 | Rate limit exceeded |
+| 429 | Rate limit exceeded; include `Retry-After` seconds and a safe `RATE_LIMITED` error |
 | 500 | Unexpected server error; log with `requestId` |
+| 503 | Required dependency unavailable; return a safe `DEPENDENCY_UNAVAILABLE` error with `requestId` |
 
 ---
 
@@ -217,7 +231,9 @@ Response:
     "requiredHeaders": {
       "Content-Type": "application/pdf"
     },
-    "expiresAt": "2026-01-10T01:00:00Z"
+    "expiresAt": "2026-01-10T00:10:00Z",
+    "documentVersion": 1,
+    "status": "issued"
   }
 }
 ```
@@ -463,6 +479,17 @@ INVALID_STATUS_TRANSITION
 CAPACITY_REACHED
 RATE_LIMITED
 INTERNAL_ERROR
+IDEMPOTENCY_KEY_REUSED
+OPERATION_IN_PROGRESS
+CONFIGURATION_CHANGED
+UPLOAD_EXPIRED
+FILE_INVALID
+REPLACEMENT_LIMIT_REACHED
+PRIVACY_ACKNOWLEDGEMENT_REQUIRED
+DEPENDENCY_UNAVAILABLE
+AUTH_LOGIN_CANCELLED
+AUTH_LOGIN_FAILED
+AUTH_PROVIDER_UNAVAILABLE
 ```
 
 Error codes are stable API contracts. Human-readable messages may be localized.
@@ -473,8 +500,9 @@ Error codes are stable API contracts. Human-readable messages may be localized.
 
 - Require HTTPS outside local development.
 - Use secure, HttpOnly, SameSite session cookies where cookie sessions are selected.
-- Apply rate limits to login, upload intent, submission, review, and export endpoints.
+- Apply rate limits to Google login initiation/callback, upload intent, submission, review, and export endpoints; return `429` with `Retry-After`.
 - Use CSRF protection appropriate to the authentication design.
+- Validate credentialed CORS and callback return destinations against exact configured origins; production origins must be explicit HTTPS values.
 - Verify participant ownership and role/permission server-side.
 - Use short-lived signed storage URLs.
 - Never trust a document type, file extension, or MIME type supplied only by the browser.
@@ -547,7 +575,7 @@ Create draft returns 201 if new, 200 if existing. Create the profile, applicatio
 - Search is literal, trimmed, max 100 characters; searchable columns are application code and approved name/contact fields. Escape SQL wildcard characters and parameterize queries. Unknown status/filter returns 422. History uses the same bounded page size and `createdAt DESC, id DESC`.
 - Export is optional until FR-OPS-004 is approved. If enabled, freeze a consistent bounded snapshot of matching submitted applications, require export plus application-read permission, audit scope/count, use allowlisted columns and CSV quoting, and neutralize formula prefixes including leading whitespace/control characters. Stream as attachment with no-store; on failure report failure and do not present a partial export as complete.
 - Configuration and permission management use authenticated operational commands in Sprint 0–2; a separate Admin UI/API is not required. Commands use the same policy/services, version checks, audit, last-admin protection, and validation as HTTP. Never edit production rows manually as the normal management flow.
-- Proposed guardrails: JSON bodies <=256 KiB, <=5 active upload intents/user, upload intents <=20/min/user, submit <=10/min/user, review <=60/min/user, export <=2/min/user; configure IP limits separately for shared camp networks. Google-login initiation/callback abuse limits must be configured and tested before launch; there is no local OTP endpoint. Return `Retry-After` on 429; no quota counter can bypass ownership checks.
+- Proposed guardrails: JSON bodies <=256 KiB, <=5 active upload intents/user, upload intents <=20/min/user, submit <=10/min/user, review <=60/min/user, export <=2/min/user, Google login initiation <=10/min/client IP, and Google callback <=20/min/client IP; configure IP limits separately for shared camp networks. Production may tighten these values, but must retain the separate initiation/callback limits and test evidence. There is no local OTP endpoint. Return `Retry-After` on 429; no quota counter can bypass ownership checks.
 - Sensitive endpoints return no-store; exact allowed origins only, credentialed CORS tested on real domains, CSRF defense on all cookie-authenticated mutations. Private endpoints return 401 if unauthenticated, 404 for hidden records, 403 for missing capability on otherwise visible scope.
 
 ### Additional stable errors
@@ -580,6 +608,13 @@ second provider or password/session handler is allowed.
 | Logout | `POST /api/v1/auth/logout` | Revokes the Prisma-backed local session after CSRF validation |
 
 The route mapping and redirect URI must match the Google Cloud configuration.
+
+The login initiation and callback endpoints use the rate limits in section 3.
+Callback failures use only the allowlisted stored frontend destination and a
+safe outcome (`cancelled`, `failed`, `unavailable`, or `denied`) plus the API
+request ID. Provider error descriptions/codes are ignored and never copied to
+the redirect query. If no valid transaction exists, return the normal safe API
+error envelope with a request ID instead of redirecting to an untrusted value.
 
 | Operation | Required behavior |
 |---|---|

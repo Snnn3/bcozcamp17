@@ -38,6 +38,8 @@ Run on every Pull Request:
 - TypeScript strict type check
 - Build check for changed applications
 - Dependency and secret scanning when configured
+- Contract conformance checks for shared Zod schemas, status unions, error envelopes, and Prisma/DBML nullability and enum alignment
+- Authentication contract checks for exact origin-only validation, explicit production HTTPS origins, Google login initiation/callback rate limits, `429` responses, and `Retry-After`
 
 ### 3.2 Unit Tests
 
@@ -331,5 +333,16 @@ Sprint 1 gates include initial uploads, retries, privacy/ownership, audit, deadl
 | AUTH-11 | Bootstrap/grant Admin, elevate session, attempt last-admin removal | Restricted audited provisioning; rotated session or re-login; last-admin protection retained |
 | AUTH-12 | Personal and Workspace accounts on mobile/desktop | Both supported without implicit domain restrictions; explicit permissions still required |
 | AUTH-13 | Inspect logs, redirects, frontend storage, and login consent | No secret/code/token/session leakage; only identity scopes requested; camp notice remains separate |
+| AUTH-14 | Exceed Google login initiation/callback limits; send path/port/HTTP production origins; return provider descriptions | Safe `429` with `Retry-After` and request ID; exact origins only; production requires HTTPS; redirect contains only an allowlisted outcome and request ID |
 
 Use deterministic provider fixtures to test failures/claims and isolated storage for sessions. Run separate real-Google smoke tests with dedicated test accounts against each environment's configured callback and audience before launch; do not automate Google's password/MFA UI or use real applicant accounts. Auth library route mapping, session policy, and Google Cloud production configuration are required evidence, not assumed complete from these specifications.
+
+## 12. Contract approval evidence
+
+Before closing Issue #8, record the contract commit and result for each shared
+boundary. At minimum the evidence must identify:
+
+- API request/response schemas and stable error codes, including required request IDs and safe `DEPENDENCY_UNAVAILABLE` responses;
+- database enum/nullability/index alignment between Prisma, the Markdown schema, DBML, and clean migrations;
+- test-plan rows for idempotency keys, upload intent lifecycle, private file access, dependency failures, exact origins, login rate limits, `429`/`Retry-After`, and safe callback outcomes;
+- any provisional production gate from `PROJECT_SPEC.md` section 18, its owner, and the synthetic-development baseline.

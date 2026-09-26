@@ -68,7 +68,7 @@ describe("authorized private document access", () => {
 
     expect(response).toEqual({
       uploadUrl: expect.stringContaining("upload"),
-      expiresAt: "2026-09-22T00:05:00.000Z",
+      expiresAt: "2026-09-22T00:10:00.000Z",
     });
     expect(response).not.toHaveProperty("storageKey");
   });

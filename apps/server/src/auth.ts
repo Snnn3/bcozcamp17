@@ -1,6 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { type ApiErrorCode, createSuccessResponse } from "@bcoz/api";
+import { DependencyUnavailableError, type ApiErrorCode, createSuccessResponse } from "@bcoz/api";
 import { PermissionEffect, Prisma, UserStatus, type PrismaClient } from "@bcoz/db";
 import {
   effectivePermissionCodes,
@@ -17,6 +17,48 @@ export const OAUTH_BROWSER_BINDING_COOKIE_NAME = "bcoz_oauth_binding";
 export const SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1_000;
 export const SESSION_ABSOLUTE_TIMEOUT_MS = 12 * 60 * 60 * 1_000;
 export const OAUTH_TRANSACTION_TIMEOUT_MS = 10 * 60 * 1_000;
+export const LOGIN_RATE_LIMIT_WINDOW_MS = 60 * 1_000;
+export const GOOGLE_LOGIN_START_RATE_LIMIT = 10;
+export const GOOGLE_LOGIN_CALLBACK_RATE_LIMIT = 20;
+
+export interface LoginRateLimitResult {
+  allowed: boolean;
+  retryAfterSeconds: number;
+}
+
+export interface LoginRateLimiter {
+  consume(
+    key: string,
+    now: number,
+    maximumRequests: number,
+    windowMs: number,
+  ): Promise<LoginRateLimitResult>;
+}
+
+export class InMemoryLoginRateLimiter implements LoginRateLimiter {
+  private readonly windows = new Map<string, { startedAt: number; count: number }>();
+
+  public async consume(
+    key: string,
+    now: number,
+    maximumRequests: number,
+    windowMs: number,
+  ): Promise<LoginRateLimitResult> {
+    const current = this.windows.get(key);
+    if (current === undefined || now - current.startedAt >= windowMs) {
+      this.windows.set(key, { startedAt: now, count: 1 });
+      return { allowed: true, retryAfterSeconds: 0 };
+    }
+    if (current.count >= maximumRequests) {
+      return {
+        allowed: false,
+        retryAfterSeconds: Math.max(1, Math.ceil((windowMs - (now - current.startedAt)) / 1_000)),
+      };
+    }
+    current.count += 1;
+    return { allowed: true, retryAfterSeconds: 0 };
+  }
+}
 
 export interface SessionRecord {
   sessionId: string;
@@ -570,6 +612,7 @@ export interface AuthBoundaryDependencies {
   transactionStore: OAuthTransactionStore;
   userDirectory: UserDirectory;
   googleProvider: GoogleIdentityProvider | undefined;
+  loginRateLimiter: LoginRateLimiter;
   now: () => number;
   secureCookies: boolean;
 }
@@ -579,6 +622,7 @@ export interface AuthBoundaryOptions {
   transactionStore?: OAuthTransactionStore;
   userDirectory?: UserDirectory;
   googleProvider?: GoogleIdentityProvider | undefined;
+  loginRateLimiter?: LoginRateLimiter;
   prisma?: PrismaClient;
   production?: boolean;
   now?: () => number;
@@ -602,12 +646,14 @@ export function createAuthBoundaryDependencies(
     (options.prisma === undefined
       ? new InMemoryOAuthTransactionStore()
       : new PrismaOAuthTransactionStore(options.prisma));
+  const loginRateLimiter = options.loginRateLimiter ?? new InMemoryLoginRateLimiter();
 
   if (
     options.production === true &&
     (sessionStore instanceof InMemorySessionStore ||
       transactionStore instanceof InMemoryOAuthTransactionStore ||
-      userDirectory instanceof InMemoryUserDirectory)
+      userDirectory instanceof InMemoryUserDirectory ||
+      loginRateLimiter instanceof InMemoryLoginRateLimiter)
   ) {
     throw new Error("Production authentication requires durable database adapters.");
   }
@@ -617,6 +663,7 @@ export function createAuthBoundaryDependencies(
     transactionStore,
     userDirectory,
     googleProvider: options.googleProvider,
+    loginRateLimiter,
     now: options.now ?? (() => Date.now()),
     secureCookies: options.secureCookies ?? false,
   };
@@ -669,17 +716,26 @@ export function registerAuthRoutes(
 
   server.post("/api/v1/auth/logout", async (request, reply) => {
     const sessionId = getCookie(request.headers.cookie, SESSION_COOKIE_NAME);
-    const session =
-      sessionId === undefined
-        ? null
-        : await dependencies.sessionStore.get(sessionId, dependencies.now());
+    let session: SessionRecord | null = null;
+    try {
+      session =
+        sessionId === undefined
+          ? null
+          : await dependencies.sessionStore.get(sessionId, dependencies.now());
+    } catch {
+      throw new DependencyUnavailableError();
+    }
 
     if (session !== null && !hasValidCsrfToken(request, session.csrfToken)) {
       return sendApiError(reply, 403, "FORBIDDEN", "The request could not be verified.");
     }
 
     if (sessionId !== undefined) {
-      await dependencies.sessionStore.revoke(sessionId);
+      try {
+        await dependencies.sessionStore.revoke(sessionId);
+      } catch {
+        throw new DependencyUnavailableError();
+      }
     }
     clearSessionCookies(reply, dependencies.secureCookies);
     reply.header("cache-control", "no-store");
@@ -687,6 +743,15 @@ export function registerAuthRoutes(
   });
 
   server.get("/auth/google/start", async (request, reply) => {
+    const rateLimit = await checkLoginRateLimit(
+      dependencies,
+      `start:${request.ip}`,
+      GOOGLE_LOGIN_START_RATE_LIMIT,
+      request,
+    );
+    if (!rateLimit.allowed) {
+      return sendRateLimitedError(reply, rateLimit.retryAfterSeconds);
+    }
     const returnTo = getSafeReturnTo(
       readQueryString(request.query, "returnTo"),
       options.allowedOrigins,
@@ -709,11 +774,16 @@ export function registerAuthRoutes(
 
     const existingBinding = getCookie(request.headers.cookie, OAUTH_BROWSER_BINDING_COOKIE_NAME);
     const browserBinding = existingBinding ?? randomToken();
-    const transaction = await dependencies.transactionStore.create(
-      returnTo,
-      browserBinding,
-      dependencies.now(),
-    );
+    let transaction: OAuthTransaction;
+    try {
+      transaction = await dependencies.transactionStore.create(
+        returnTo,
+        browserBinding,
+        dependencies.now(),
+      );
+    } catch {
+      throw new DependencyUnavailableError();
+    }
     const authorizationUrl = provider.createAuthorizationUrl({
       clientId,
       redirectUri,
@@ -728,14 +798,31 @@ export function registerAuthRoutes(
   });
 
   server.get("/auth/google/callback", async (request, reply) => {
+    const rateLimit = await checkLoginRateLimit(
+      dependencies,
+      `callback:${request.ip}`,
+      GOOGLE_LOGIN_CALLBACK_RATE_LIMIT,
+      request,
+    );
+    if (!rateLimit.allowed) {
+      return sendRateLimitedError(reply, rateLimit.retryAfterSeconds);
+    }
     const state = readQueryString(request.query, "state");
     const code = readQueryString(request.query, "code");
     const providerError = readQueryString(request.query, "error");
     const browserBinding = getCookie(request.headers.cookie, OAUTH_BROWSER_BINDING_COOKIE_NAME);
-    const transaction =
-      state === undefined || browserBinding === undefined
-        ? null
-        : await dependencies.transactionStore.consume(state, browserBinding, dependencies.now());
+    let transaction: OAuthTransaction | null = null;
+    if (state !== undefined && browserBinding !== undefined) {
+      try {
+        transaction = await dependencies.transactionStore.consume(
+          state,
+          browserBinding,
+          dependencies.now(),
+        );
+      } catch {
+        throw new DependencyUnavailableError();
+      }
+    }
 
     if (state === undefined || transaction === null) {
       return sendApiError(
@@ -746,26 +833,16 @@ export function registerAuthRoutes(
       );
     }
     if (providerError === "access_denied") {
-      return sendApiError(reply, 400, "AUTH_LOGIN_CANCELLED", "Google sign-in was cancelled.");
+      return sendSafeLoginOutcome(reply, transaction.returnTo, "cancelled");
     }
     if (code === undefined) {
-      return sendApiError(
-        reply,
-        400,
-        "AUTH_LOGIN_FAILED",
-        "Google sign-in could not be completed.",
-      );
+      return sendSafeLoginOutcome(reply, transaction.returnTo, "failed");
     }
 
     const provider = dependencies.googleProvider;
     const redirectUri = options.googleRedirectUri;
     if (provider === undefined || redirectUri === undefined) {
-      return sendApiError(
-        reply,
-        503,
-        "AUTH_PROVIDER_UNAVAILABLE",
-        "Google sign-in is temporarily unavailable.",
-      );
+      return sendSafeLoginOutcome(reply, transaction.returnTo, "unavailable");
     }
 
     let identity: VerifiedGoogleIdentity;
@@ -779,40 +856,45 @@ export function registerAuthRoutes(
       });
     } catch {
       request.log.warn("Google identity exchange failed");
-      return sendApiError(
-        reply,
-        503,
-        "AUTH_PROVIDER_UNAVAILABLE",
-        "Google sign-in is temporarily unavailable.",
-      );
+      return sendSafeLoginOutcome(reply, transaction.returnTo, "unavailable");
     }
 
     if (!identity.emailVerified || identity.subject.trim() === "" || identity.email.trim() === "") {
-      return sendApiError(reply, 403, "AUTH_LOGIN_FAILED", "Google sign-in was not accepted.");
+      return sendSafeLoginOutcome(reply, transaction.returnTo, "denied");
     }
 
     const currentSession = await getActiveSession(request, dependencies);
-    const resolution = await dependencies.userDirectory.resolveGoogleIdentity(identity);
+    let resolution: UserResolution;
+    try {
+      resolution = await dependencies.userDirectory.resolveGoogleIdentity(identity);
+    } catch {
+      throw new DependencyUnavailableError();
+    }
     if (resolution.kind !== "authenticated") {
-      return sendApiError(reply, 403, "AUTH_LOGIN_FAILED", "Google sign-in was not accepted.");
+      return sendSafeLoginOutcome(reply, transaction.returnTo, "denied");
     }
     if (
       currentSession !== null &&
       currentSession.principal.userId !== resolution.principal.userId
     ) {
-      return sendApiError(reply, 409, "AUTH_LOGIN_FAILED", "Sign out before switching accounts.");
+      return sendSafeLoginOutcome(reply, transaction.returnTo, "failed");
     }
 
-    const session =
-      currentSession === null
-        ? await dependencies.sessionStore.create(resolution.principal, dependencies.now())
-        : await dependencies.sessionStore.rotate(
-            currentSession.sessionId,
-            resolution.principal,
-            dependencies.now(),
-          );
+    let session: SessionRecord | null;
+    try {
+      session =
+        currentSession === null
+          ? await dependencies.sessionStore.create(resolution.principal, dependencies.now())
+          : await dependencies.sessionStore.rotate(
+              currentSession.sessionId,
+              resolution.principal,
+              dependencies.now(),
+            );
+    } catch {
+      throw new DependencyUnavailableError();
+    }
     if (session === null) {
-      return sendApiError(reply, 401, "AUTHENTICATION_REQUIRED", "Authentication is required.");
+      return sendSafeLoginOutcome(reply, transaction.returnTo, "failed");
     }
 
     setSessionCookies(reply, session, dependencies.secureCookies);
@@ -875,6 +957,43 @@ export function sendApiError(
   });
 }
 
+function sendRateLimitedError(reply: FastifyReply, retryAfterSeconds: number): FastifyReply {
+  reply.header("retry-after", String(retryAfterSeconds));
+  return sendApiError(reply, 429, "RATE_LIMITED", "Too many login attempts. Try again later.");
+}
+
+function sendSafeLoginOutcome(
+  reply: FastifyReply,
+  returnTo: string,
+  outcome: "cancelled" | "failed" | "unavailable" | "denied",
+): FastifyReply {
+  const destination = new URL(returnTo);
+  destination.searchParams.delete("auth");
+  destination.searchParams.delete("requestId");
+  destination.searchParams.set("auth", outcome);
+  destination.searchParams.set("requestId", reply.request.id);
+  return reply.redirect(destination.toString());
+}
+
+async function checkLoginRateLimit(
+  dependencies: AuthBoundaryDependencies,
+  key: string,
+  maximumRequests: number,
+  request: FastifyRequest,
+): Promise<LoginRateLimitResult> {
+  try {
+    return await dependencies.loginRateLimiter.consume(
+      key,
+      dependencies.now(),
+      maximumRequests,
+      LOGIN_RATE_LIMIT_WINDOW_MS,
+    );
+  } catch {
+    request.log.warn("Login rate limiter unavailable");
+    throw new DependencyUnavailableError();
+  }
+}
+
 async function getActiveSession(
   request: FastifyRequest,
   dependencies: AuthBoundaryDependencies,
@@ -884,12 +1003,21 @@ async function getActiveSession(
     return null;
   }
 
-  const session = await dependencies.sessionStore.get(sessionId, dependencies.now());
+  let session: SessionRecord | null;
+  try {
+    session = await dependencies.sessionStore.get(sessionId, dependencies.now());
+  } catch {
+    throw new DependencyUnavailableError();
+  }
   if (session === null) {
     return null;
   }
   if (session.principal.status === "disabled") {
-    await dependencies.sessionStore.revoke(sessionId);
+    try {
+      await dependencies.sessionStore.revoke(sessionId);
+    } catch {
+      throw new DependencyUnavailableError();
+    }
     return null;
   }
   return session;

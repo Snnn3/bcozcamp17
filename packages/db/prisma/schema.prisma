@@ -39,6 +39,12 @@ enum DocumentStatus {
   REJECTED           @map("rejected")
 }
 
+enum DocumentReviewStatus {
+  APPROVED           @map("approved")
+  CORRECTION_REQUIRED @map("correction_required")
+  REJECTED           @map("rejected")
+}
+
 enum PermissionEffect {
   ALLOW @map("allow")
   DENY  @map("deny")
@@ -384,7 +390,7 @@ model DocumentReviewHistory {
   submissionId         String              @map("submission_id") @db.Uuid
   reviewerId           String              @map("reviewer_id") @db.Uuid
   documentVersion      Int                 @map("document_version")
-  status               DocumentStatus
+  status               DocumentReviewStatus
   applicantMessage     String              @map("applicant_message") @db.Text
   internalNote         String?             @map("internal_note") @db.Text
   replacementAllowed   Boolean             @map("replacement_allowed")

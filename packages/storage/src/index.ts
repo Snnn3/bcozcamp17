@@ -209,8 +209,8 @@ export interface PrivateObjectStorage {
   createDownloadUrl(input: CreateDownloadUrlInput): Promise<string>;
 }
 
-export const STORAGE_UPLOAD_URL_DEFAULT_TTL_SECONDS = 300;
-export const STORAGE_UPLOAD_URL_MAX_TTL_SECONDS = 300;
+export const STORAGE_UPLOAD_URL_DEFAULT_TTL_SECONDS = 600;
+export const STORAGE_UPLOAD_URL_MAX_TTL_SECONDS = 600;
 export const STORAGE_DOWNLOAD_URL_DEFAULT_TTL_SECONDS = 60;
 export const STORAGE_DOWNLOAD_URL_MAX_TTL_SECONDS = 60;
 

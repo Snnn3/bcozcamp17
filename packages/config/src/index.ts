@@ -10,9 +10,21 @@ const optionalUrl = z.preprocess(
   (value: unknown) => (value === "" ? undefined : value),
   z.string().url().optional(),
 );
-const storageEndpoint = optionalUrl.refine(
-  (value) => value === undefined || ["http:", "https:"].includes(new URL(value).protocol),
-  "STORAGE_ENDPOINT must use HTTP or HTTPS.",
+const storageEndpoint = optionalUrl.refine((value) => {
+  if (value === undefined) {
+    return true;
+  }
+  const endpoint = new URL(value);
+  return (
+    ["http:", "https:"].includes(endpoint.protocol) &&
+    endpoint.username === "" &&
+    endpoint.password === "" &&
+    endpoint.hash === ""
+  );
+}, "STORAGE_ENDPOINT must use HTTP or HTTPS without credentials or a fragment.");
+const storageSecret = z.preprocess(
+  (value: unknown) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+  z.string().trim().min(1).optional(),
 );
 const storageBucket = z
   .string()
@@ -45,10 +57,10 @@ const environmentInputSchema = z.object({
   DATABASE_URL: optionalNonEmptyString,
   SESSION_SECRET: optionalNonEmptyString,
   STORAGE_ENDPOINT: storageEndpoint,
-  STORAGE_REGION: z.string().min(1).default("us-east-1"),
+  STORAGE_REGION: z.string().trim().min(1).default("us-east-1"),
   STORAGE_BUCKET: storageBucket.default("bcoz-private"),
-  STORAGE_ACCESS_KEY_ID: optionalNonEmptyString,
-  STORAGE_SECRET_ACCESS_KEY: optionalNonEmptyString,
+  STORAGE_ACCESS_KEY_ID: storageSecret,
+  STORAGE_SECRET_ACCESS_KEY: storageSecret,
   STORAGE_FORCE_PATH_STYLE: booleanFromEnvironment,
   GOOGLE_CLIENT_ID: optionalNonEmptyString,
   GOOGLE_CLIENT_SECRET: optionalNonEmptyString,
@@ -58,9 +70,7 @@ const environmentInputSchema = z.object({
 export const environmentSchema = environmentInputSchema.transform((input) => ({
   nodeEnv: input.NODE_ENV,
   port: input.PORT,
-  webOrigins: input.WEB_ORIGINS.split(",")
-    .map((origin) => origin.trim())
-    .filter((origin) => origin.length > 0),
+  webOrigins: parseWebOrigins(input.WEB_ORIGINS),
   databaseUrl: input.DATABASE_URL,
   sessionSecret: input.SESSION_SECRET,
   storageEndpoint: input.STORAGE_ENDPOINT,
@@ -85,10 +95,6 @@ export function loadEnvironmentFile(filePath: string = resolve(process.cwd(), ".
 export function parseEnvironment(input: NodeJS.ProcessEnv = process.env): Environment {
   const environment = environmentSchema.parse(input);
 
-  if (environment.webOrigins.length === 0) {
-    throw new Error("WEB_ORIGINS must contain at least one allowed origin.");
-  }
-
   const hasStorageAccessKey = environment.storageAccessKeyId !== undefined;
   const hasStorageSecretKey = environment.storageSecretAccessKey !== undefined;
   if (hasStorageAccessKey !== hasStorageSecretKey) {
@@ -98,6 +104,12 @@ export function parseEnvironment(input: NodeJS.ProcessEnv = process.env): Enviro
   }
 
   if (environment.nodeEnv === "production") {
+    if (input.STORAGE_FORCE_PATH_STYLE?.trim().toLowerCase() !== "false") {
+      throw new Error("Production STORAGE_FORCE_PATH_STYLE must be explicitly false.");
+    }
+    if (environment.webOrigins.some((origin) => new URL(origin).protocol !== "https:")) {
+      throw new Error("Production WEB_ORIGINS must use HTTPS.");
+    }
     if (
       environment.storageEndpoint !== undefined &&
       new URL(environment.storageEndpoint).protocol !== "https:"
@@ -122,6 +134,39 @@ export function parseEnvironment(input: NodeJS.ProcessEnv = process.env): Enviro
   }
 
   return environment;
+}
+
+function parseWebOrigins(value: string): string[] {
+  const origins = value
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter((origin) => origin.length > 0)
+    .map((origin) => {
+      if (origin.includes("?") || origin.includes("#")) {
+        throw new Error("WEB_ORIGINS must contain exact origins without paths or credentials.");
+      }
+      let parsed: URL;
+      try {
+        parsed = new URL(origin);
+      } catch {
+        throw new Error("WEB_ORIGINS must contain valid exact origins.");
+      }
+      if (
+        parsed.username !== "" ||
+        parsed.password !== "" ||
+        parsed.pathname !== "/" ||
+        parsed.search !== "" ||
+        parsed.hash !== ""
+      ) {
+        throw new Error("WEB_ORIGINS must contain exact origins without paths or credentials.");
+      }
+      return parsed.origin;
+    });
+
+  if (origins.length === 0) {
+    throw new Error("WEB_ORIGINS must contain at least one allowed origin.");
+  }
+  return [...new Set(origins)];
 }
 
 loadEnvironmentFile();

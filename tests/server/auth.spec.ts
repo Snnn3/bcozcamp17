@@ -9,6 +9,8 @@ import {
   OAUTH_BROWSER_BINDING_COOKIE_NAME,
   OAUTH_TRANSACTION_TIMEOUT_MS,
   SESSION_COOKIE_NAME,
+  type LoginRateLimiter,
+  type SessionStore,
   type GoogleIdentityProvider,
   type SessionRecord,
 } from "../../apps/server/src/auth";
@@ -140,6 +142,39 @@ describe("server authentication boundary", () => {
     await server.close();
   });
 
+  it("maps dependency failures to a safe retryable error envelope", async () => {
+    const failingSessionStore: SessionStore = {
+      create: async () => {
+        throw new Error("Prisma SQL details must not escape");
+      },
+      get: async () => {
+        throw new Error("Prisma SQL details must not escape");
+      },
+      rotate: async () => null,
+      revoke: async () => undefined,
+    };
+    const server = await buildServer({
+      auth: { sessionStore: failingSessionStore, secureCookies: false },
+    });
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/v1/auth/session",
+      headers: { cookie: `${SESSION_COOKIE_NAME}=session-id` },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({
+      error: {
+        code: "DEPENDENCY_UNAVAILABLE",
+        message: "A required service is temporarily unavailable.",
+        requestId: expect.any(String),
+      },
+    });
+    expect(response.body).not.toContain("Prisma");
+    await server.close();
+  });
+
   it("denies a disabled principal even when its session has a prior allow", async () => {
     const { server, session } = await createTestServer({ ...staffPrincipal, status: "disabled" });
     const cookie = `${SESSION_COOKIE_NAME}=${encodeURIComponent(session.sessionId)}`;
@@ -232,6 +267,25 @@ describe("server authentication boundary", () => {
       findSetCookieHeader(secondStart.headers["set-cookie"], OAUTH_BROWSER_BINDING_COOKIE_NAME),
     ).toBeUndefined();
 
+    const cancelledStart = await server.inject({
+      method: "GET",
+      url: "/auth/google/start?returnTo=http%3A%2F%2Flocalhost%3A5173%2Flogin%3Fauth%3Dold",
+      headers: { cookie },
+    });
+    const cancelledState = new URL(cancelledStart.headers.location ?? "").searchParams.get("state");
+    const cancelled = await server.inject({
+      method: "GET",
+      url: `/auth/google/callback?state=${cancelledState}&error=access_denied&error_description=secret-provider-detail`,
+      headers: { cookie },
+    });
+    const cancelledLocation = new URL(cancelled.headers.location ?? "");
+    expect(cancelled.statusCode).toBe(302);
+    expect(cancelledLocation.origin).toBe("http://localhost:5173");
+    expect(cancelledLocation.searchParams.get("auth")).toBe("cancelled");
+    expect(cancelledLocation.searchParams.get("requestId")).toEqual(expect.any(String));
+    expect(cancelledLocation.search).not.toContain("secret-provider-detail");
+    expect(cancelledLocation.searchParams.get("auth")).not.toBe("old");
+
     const wrongBrowser = await server.inject({
       method: "GET",
       url: `/auth/google/callback?state=${state}&code=code`,
@@ -275,6 +329,45 @@ describe("server authentication boundary", () => {
     });
     expect(expired.statusCode).toBe(400);
 
+    await server.close();
+  });
+
+  it("returns 429 and Retry-After when login initiation exceeds its limiter", async () => {
+    let calls = 0;
+    const limiter: LoginRateLimiter = {
+      consume: async () => {
+        calls += 1;
+        return { allowed: calls === 1, retryAfterSeconds: 7 };
+      },
+    };
+    const provider: GoogleIdentityProvider = {
+      createAuthorizationUrl: ({ state }) => `https://accounts.google.test/?state=${state}`,
+      exchangeAuthorizationCode: async () => ({
+        subject: "rate-limit-subject",
+        email: "rate-limit@example.test",
+        emailVerified: true,
+      }),
+    };
+    const server = Fastify();
+    registerAuthRoutes(
+      server,
+      createAuthBoundaryDependencies({ googleProvider: provider, loginRateLimiter: limiter }),
+      {
+        allowedOrigins: ["http://localhost:5173"],
+        googleClientId: "client-id",
+        googleRedirectUri: "http://localhost:3000/auth/google/callback",
+      },
+    );
+
+    const first = await server.inject({ method: "GET", url: "/auth/google/start" });
+    const second = await server.inject({ method: "GET", url: "/auth/google/start" });
+
+    expect(first.statusCode).toBe(302);
+    expect(second.statusCode).toBe(429);
+    expect(second.headers["retry-after"]).toBe("7");
+    expect(second.json()).toMatchObject({
+      error: { code: "RATE_LIMITED", requestId: expect.any(String) },
+    });
     await server.close();
   });
 });
