@@ -101,8 +101,18 @@ describe("environment setup", () => {
       "http://localhost:5173#fragment",
       "http://user:secret@localhost:5173",
       "//localhost:5173",
+      "ftp://example.test/",
+      "file:///tmp/bcoz",
     ]) {
       expect(() => parseEnvironment({ ...process.env, WEB_ORIGINS: unsafeOrigin })).toThrow();
+    }
+    for (const malformedOrigins of [
+      "http://localhost:5173,",
+      "http://localhost:5173,,http://localhost:5174",
+    ]) {
+      expect(() => parseEnvironment({ ...process.env, WEB_ORIGINS: malformedOrigins })).toThrow(
+        "empty entries",
+      );
     }
   });
 

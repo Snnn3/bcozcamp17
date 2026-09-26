@@ -19,4 +19,4 @@ ADD CONSTRAINT "document_review_history_failure_message_check" CHECK (
 ALTER INDEX "document_review_history_document_version_unique" RENAME TO "document_review_history_application_document_id_document_ve_key";
 
 -- RenameIndex
-ALTER INDEX "notification_documents_application_document_id_notification_id_" RENAME TO "notification_documents_application_document_id_notification_idx";
+ALTER INDEX "notification_documents_application_document_id_notification_id_idx" RENAME TO "notification_documents_application_document_id_notification_idx";
