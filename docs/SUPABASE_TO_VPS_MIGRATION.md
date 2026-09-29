@@ -109,6 +109,11 @@ Supabase's platform restore guide targets a self-hosted Supabase instance. It no
 
 ### Phase 3: Move Google sign-in off Supabase Auth
 
+Supabase Auth owns the Google login flow and provider login limits before this
+phase. Only after this cutover are Fastify's `/auth/google/start` and
+`/auth/google/callback` endpoints enabled; configure their shared application
+rate limiter across API instances as specified in `docs/API_SPEC.md` section 3.
+
 1. Configure Google OpenID Connect for the Fastify application and add the VPS callback URL to the Google OAuth client.
 2. At sign-in, validate Google's OIDC response and map the Google `sub` to the existing `users.id`. Use the identity mapping and `users.google_subject` prepared before launch, never email matching alone. Follow the existing account-collision rule; do not automatically link a different Google identity by matching email.
 3. Create a server-managed session in Fastify using secure, HttpOnly cookies. Apply the project's CSRF protection and exact allowed-origin rules.

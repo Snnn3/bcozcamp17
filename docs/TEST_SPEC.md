@@ -39,7 +39,7 @@ Run on every Pull Request:
 - Build check for changed applications
 - Dependency and secret scanning when configured
 - Contract conformance checks for shared Zod schemas, status unions, error envelopes, and Prisma/DBML nullability and enum alignment
-- Authentication contract checks for exact origin-only validation, explicit production HTTPS origins, Google login initiation/callback rate limits, `429` responses, and `Retry-After`
+- Authentication contract checks for exact origin-only validation, explicit production HTTPS origins, and `429`/`Retry-After` behavior. Verify provider-owned login limits during the initial Supabase phase and shared application login initiation/callback limits after the final Fastify OIDC cutover.
 
 ### 3.2 Unit Tests
 
@@ -180,7 +180,7 @@ Expected result: session B receives a stale-version conflict even though the fil
 - Verify signed URLs expire and cannot be reused beyond their policy.
 - Verify file content validation is performed server-side.
 - Verify logs do not contain passwords, tokens, raw files, or sensitive document content.
-- Verify rate limits for login, upload, submit, review, and export operations.
+- Verify Supabase Auth's provider-owned login limits during the initial phase and the shared application limits for Google login initiation/callback after the final Fastify OIDC cutover; also verify limits for upload, submit, review, and export operations.
 - Verify CSRF protection according to the chosen authentication design.
 
 ---
@@ -334,7 +334,7 @@ Sprint 1 gates include initial uploads, retries, privacy/ownership, audit, deadl
 | AUTH-11 | Bootstrap/grant Admin, elevate session, attempt last-admin removal | Restricted audited provisioning; rotated session or re-login; last-admin protection retained |
 | AUTH-12 | Personal and Workspace accounts on mobile/desktop | Both supported without implicit domain restrictions; explicit permissions still required |
 | AUTH-13 | Inspect logs, redirects, frontend storage, and login consent | No secret/code/token/session leakage; only identity scopes requested; camp notice remains separate |
-| AUTH-14 | Exceed Google login initiation/callback limits; send path/port/HTTP production origins; return provider descriptions | Safe `429` with `Retry-After` and request ID; exact origins only; production requires HTTPS; redirect contains only an allowlisted outcome and request ID |
+| AUTH-14 | After final Fastify OIDC cutover, exceed application Google login initiation/callback limits; send path/port/HTTP production origins; return provider descriptions | Safe `429` with `Retry-After` and request ID from the shared limiter; exact origins only; production requires HTTPS; redirect contains only an allowlisted outcome and request ID. During initial Supabase auth, login limits are provider-owned. |
 | AUTH-15 | Concurrent login attempts share a PostgreSQL rate-limit bucket; traffic enters a later fixed window | Exactly the configured request budget is allowed across concurrent consumers; expired bucket rows are removed without losing the active-window count |
 
 Use deterministic provider fixtures to test failures/claims and isolated storage for sessions. Run separate real-Google smoke tests with dedicated test accounts against each environment's configured callback and audience before launch; do not automate Google's password/MFA UI or use real applicant accounts. Auth library route mapping, session policy, and Google Cloud production configuration are required evidence, not assumed complete from these specifications.

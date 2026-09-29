@@ -59,12 +59,17 @@ protocol-relative values, and alternate ports are rejected. Production
 allowlisted origins must use HTTPS; local development may use HTTP localhost
 origins.
 
-Google login initiation and callback are rate-limited independently. The
-development baseline is 10 initiation requests and 20 callback requests per
-minute per client IP; production may use a stricter centrally configured limit.
-An exceeded limit returns `429` with `error.code = RATE_LIMITED`, a safe message,
-a request ID, and a numeric `Retry-After` header. The limiter must be shared or
-otherwise coordinated across API instances before production launch.
+Rate limiting is phase-specific. During the initial Supabase phase, Supabase
+Auth owns the Google login flow and its provider login limits; the application
+does not expose `/auth/google/start` or `/auth/google/callback`. The temporary
+Fastify bearer bridge also does not expose those login routes. After the final
+Fastify OIDC cutover, the application-owned login initiation and callback
+endpoints are rate-limited independently using a shared or otherwise
+coordinated limiter across API instances. The development baseline is 10
+initiation requests and 20 callback requests per minute per client IP;
+production may use a stricter centrally configured limit. An exceeded limit
+returns `429` with `error.code = RATE_LIMITED`, a safe message, a request ID,
+and a numeric `Retry-After` header.
 
 For submission, upload completion, review, and final decision operations, the client must send:
 
@@ -515,7 +520,7 @@ Error codes are stable API contracts. Human-readable messages may be localized.
 
 - Require HTTPS outside local development.
 - Use secure, HttpOnly, SameSite session cookies where cookie sessions are selected.
-- Apply rate limits to Google login initiation/callback, upload intent, submission, review, and export endpoints; return `429` with `Retry-After`.
+- Apply shared rate limits to the application-owned Google login initiation/callback endpoints after the final Fastify OIDC cutover; initial Supabase Auth login limits are provider-owned. Also limit upload intent, submission, review, and export endpoints; return `429` with `Retry-After`.
 - Use CSRF protection appropriate to the authentication design.
 - Validate credentialed CORS and callback return destinations against exact configured origins; production origins must be explicit HTTPS values.
 - Verify participant ownership and role/permission server-side.
@@ -607,29 +612,33 @@ Existing errors map as follows: stale versions, invalid transitions, closed regi
 
 ## 12. Google authentication integration contract
 
-This release selects Google's `google-auth-library` as the provider integration
-for authorization-code exchange, ID-token verification, nonce validation, and
-Google key rotation. The application owns only the local boundary around that
-provider client: it persists `auth_sessions` and
+After the final Fastify OIDC cutover, Fastify uses Google's
+`google-auth-library` as the provider integration for authorization-code
+exchange, ID-token verification, nonce validation, and Google key rotation.
+The application owns only the local boundary around that provider client: it persists `auth_sessions` and
 `auth_oauth_transactions` with the Prisma migrations, provisions the local
 `users` row, and exposes the exact paths below. There is one OAuth handler; no
 second provider or password/session handler is allowed.
 
 | Local operation | Exact path | Selected-library boundary |
 |---|---|---|
-| Start Google login | `GET /auth/google/start` | Creates the browser-bound state/nonce/PKCE transaction and calls the Google client URL contract |
-| Google callback | `GET /auth/google/callback` | Exchanges the code and verifies the ID token with `google-auth-library` |
+| Start Google login (final Fastify phase) | `GET /auth/google/start` | Creates the browser-bound state/nonce/PKCE transaction and calls the Google client URL contract |
+| Google callback (final Fastify phase) | `GET /auth/google/callback` | Exchanges the code and verifies the ID token with `google-auth-library` |
 | Read local session | `GET /api/v1/auth/session` | Reads the Prisma-backed local session and current permissions |
 | Logout | `POST /api/v1/auth/logout` | Revokes the Prisma-backed local session after CSRF validation |
 
 The route mapping and redirect URI must match the Google Cloud configuration.
 
-The login initiation and callback endpoints use the rate limits in section 3.
-Callback failures use only the allowlisted stored frontend destination and a
-safe outcome (`cancelled`, `failed`, `unavailable`, or `denied`) plus the API
-request ID. Provider error descriptions/codes are ignored and never copied to
-the redirect query. If no valid transaction exists, return the normal safe API
-error envelope with a request ID instead of redirecting to an untrusted value.
+These application-owned login initiation and callback endpoints exist only
+after the final Fastify OIDC cutover. They use the shared rate limits in
+section 3; during the initial Supabase phase, Supabase Auth owns and limits the
+Google login flow, and the temporary Fastify bearer bridge does not expose
+these login routes. Callback failures use only the allowlisted stored frontend
+destination and a safe outcome (`cancelled`, `failed`, `unavailable`, or
+`denied`) plus the API request ID. Provider error descriptions/codes are
+ignored and never copied to the redirect query. If no valid transaction
+exists, return the normal safe API error envelope with a request ID instead of
+redirecting to an untrusted value.
 
 | Operation | Required behavior |
 |---|---|
