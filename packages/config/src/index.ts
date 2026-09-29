@@ -65,9 +65,11 @@ const booleanFromEnvironment = z.preprocess((value: unknown) => {
   }
   return value;
 }, z.boolean().default(true));
+const authPhase = z.enum(["supabase", "fastify"]).default("fastify");
 
 const environmentInputSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  AUTH_PHASE: authPhase,
   PORT: z.coerce.number().int().min(1).max(65_535).default(3_000),
   WEB_ORIGINS: z.string().default("http://localhost:5173,http://localhost:5174"),
   DATABASE_URL: optionalNonEmptyString,
@@ -86,6 +88,7 @@ const environmentInputSchema = z.object({
 
 export const environmentSchema = environmentInputSchema.transform((input) => ({
   nodeEnv: input.NODE_ENV,
+  authPhase: input.AUTH_PHASE,
   port: input.PORT,
   webOrigins: parseWebOrigins(input.WEB_ORIGINS),
   databaseUrl: input.DATABASE_URL,
@@ -103,6 +106,7 @@ export const environmentSchema = environmentInputSchema.transform((input) => ({
 }));
 
 export type Environment = z.infer<typeof environmentSchema>;
+export type AuthPhase = z.infer<typeof authPhase>;
 
 export function loadEnvironmentFile(filePath: string = resolve(process.cwd(), ".env")): void {
   if (existsSync(filePath)) {
@@ -119,6 +123,10 @@ export function parseEnvironment(input: NodeJS.ProcessEnv = process.env): Enviro
     throw new Error(
       "STORAGE_ACCESS_KEY_ID and STORAGE_SECRET_ACCESS_KEY must be provided together.",
     );
+  }
+
+  if (environment.authPhase === "supabase" && environment.supabaseUrl === undefined) {
+    throw new Error("SUPABASE_URL is required when AUTH_PHASE is supabase.");
   }
 
   if (environment.nodeEnv === "production") {
@@ -149,9 +157,13 @@ export function parseEnvironment(input: NodeJS.ProcessEnv = process.env): Enviro
       ["STORAGE_ENDPOINT", environment.storageEndpoint],
       ["STORAGE_ACCESS_KEY_ID", environment.storageAccessKeyId],
       ["STORAGE_SECRET_ACCESS_KEY", environment.storageSecretAccessKey],
-      ["GOOGLE_CLIENT_ID", environment.googleClientId],
-      ["GOOGLE_CLIENT_SECRET", environment.googleClientSecret],
-      ["GOOGLE_REDIRECT_URI", environment.googleRedirectUri],
+      ...(environment.authPhase === "fastify"
+        ? [
+            ["GOOGLE_CLIENT_ID", environment.googleClientId],
+            ["GOOGLE_CLIENT_SECRET", environment.googleClientSecret],
+            ["GOOGLE_REDIRECT_URI", environment.googleRedirectUri],
+          ]
+        : []),
     ].filter(([, value]) => value === undefined);
 
     if (missingProductionValues.length > 0) {

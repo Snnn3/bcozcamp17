@@ -751,6 +751,7 @@ export interface RegisterAuthRoutesOptions {
   allowedOrigins: readonly string[];
   googleClientId?: string | undefined;
   googleRedirectUri?: string | undefined;
+  enableGoogleRoutes?: boolean;
 }
 
 export function createGoogleAuthorizationUrl(request: GoogleAuthorizationRequest): string {
@@ -820,164 +821,175 @@ export function registerAuthRoutes(
     return reply.code(204).send();
   });
 
-  server.get("/auth/google/start", async (request, reply) => {
-    const rateLimit = await checkLoginRateLimit(
-      dependencies,
-      `start:${request.ip}`,
-      GOOGLE_LOGIN_START_RATE_LIMIT,
-      request,
-    );
-    if (!rateLimit.allowed) {
-      return sendRateLimitedError(reply, rateLimit.retryAfterSeconds);
-    }
-    const returnTo = getSafeReturnTo(
-      readQueryString(request.query, "returnTo"),
-      options.allowedOrigins,
-    );
-    if (returnTo === null) {
-      return sendApiError(reply, 400, "AUTH_LOGIN_FAILED", "The login destination is not allowed.");
-    }
-
-    const clientId = options.googleClientId;
-    const redirectUri = options.googleRedirectUri;
-    const provider = dependencies.googleProvider;
-    if (clientId === undefined || redirectUri === undefined || provider === undefined) {
-      return sendApiError(
-        reply,
-        503,
-        "AUTH_PROVIDER_UNAVAILABLE",
-        "Google sign-in is temporarily unavailable.",
+  if (options.enableGoogleRoutes ?? true) {
+    server.get("/auth/google/start", async (request, reply) => {
+      const rateLimit = await checkLoginRateLimit(
+        dependencies,
+        `start:${request.ip}`,
+        GOOGLE_LOGIN_START_RATE_LIMIT,
+        request,
       );
-    }
-
-    const existingBinding = getCookie(request.headers.cookie, OAUTH_BROWSER_BINDING_COOKIE_NAME);
-    const browserBinding = existingBinding ?? randomToken();
-    let transaction: OAuthTransaction;
-    try {
-      transaction = await dependencies.transactionStore.create(
-        returnTo,
-        browserBinding,
-        dependencies.now(),
+      if (!rateLimit.allowed) {
+        return sendRateLimitedError(reply, rateLimit.retryAfterSeconds);
+      }
+      const returnTo = getSafeReturnTo(
+        readQueryString(request.query, "returnTo"),
+        options.allowedOrigins,
       );
-    } catch {
-      throw new DependencyUnavailableError();
-    }
-    const authorizationUrl = provider.createAuthorizationUrl({
-      clientId,
-      redirectUri,
-      state: transaction.state,
-      nonce: transaction.nonce,
-      codeChallenge: createCodeChallenge(transaction.codeVerifier),
-    });
-    if (existingBinding === undefined) {
-      setOAuthBindingCookie(reply, browserBinding, dependencies.secureCookies);
-    }
-    return reply.redirect(authorizationUrl);
-  });
+      if (returnTo === null) {
+        return sendApiError(
+          reply,
+          400,
+          "AUTH_LOGIN_FAILED",
+          "The login destination is not allowed.",
+        );
+      }
 
-  server.get("/auth/google/callback", async (request, reply) => {
-    const rateLimit = await checkLoginRateLimit(
-      dependencies,
-      `callback:${request.ip}`,
-      GOOGLE_LOGIN_CALLBACK_RATE_LIMIT,
-      request,
-    );
-    if (!rateLimit.allowed) {
-      return sendRateLimitedError(reply, rateLimit.retryAfterSeconds);
-    }
-    const state = readQueryString(request.query, "state");
-    const code = readQueryString(request.query, "code");
-    const providerError = readQueryString(request.query, "error");
-    const browserBinding = getCookie(request.headers.cookie, OAUTH_BROWSER_BINDING_COOKIE_NAME);
-    let transaction: OAuthTransaction | null = null;
-    if (state !== undefined && browserBinding !== undefined) {
+      const clientId = options.googleClientId;
+      const redirectUri = options.googleRedirectUri;
+      const provider = dependencies.googleProvider;
+      if (clientId === undefined || redirectUri === undefined || provider === undefined) {
+        return sendApiError(
+          reply,
+          503,
+          "AUTH_PROVIDER_UNAVAILABLE",
+          "Google sign-in is temporarily unavailable.",
+        );
+      }
+
+      const existingBinding = getCookie(request.headers.cookie, OAUTH_BROWSER_BINDING_COOKIE_NAME);
+      const browserBinding = existingBinding ?? randomToken();
+      let transaction: OAuthTransaction;
       try {
-        transaction = await dependencies.transactionStore.consume(
-          state,
+        transaction = await dependencies.transactionStore.create(
+          returnTo,
           browserBinding,
           dependencies.now(),
         );
       } catch {
         throw new DependencyUnavailableError();
       }
-    }
-
-    if (state === undefined || transaction === null) {
-      return sendApiError(
-        reply,
-        400,
-        "AUTH_LOGIN_FAILED",
-        "Google sign-in could not be completed.",
-      );
-    }
-    if (providerError === "access_denied") {
-      return sendSafeLoginOutcome(reply, transaction.returnTo, "cancelled");
-    }
-    if (code === undefined) {
-      return sendSafeLoginOutcome(reply, transaction.returnTo, "failed");
-    }
-
-    const provider = dependencies.googleProvider;
-    const redirectUri = options.googleRedirectUri;
-    if (provider === undefined || redirectUri === undefined) {
-      return sendSafeLoginOutcome(reply, transaction.returnTo, "unavailable");
-    }
-
-    let identity: VerifiedGoogleIdentity;
-    try {
-      identity = await provider.exchangeAuthorizationCode({
-        code,
+      const authorizationUrl = provider.createAuthorizationUrl({
+        clientId,
         redirectUri,
-        state,
+        state: transaction.state,
         nonce: transaction.nonce,
-        codeVerifier: transaction.codeVerifier,
+        codeChallenge: createCodeChallenge(transaction.codeVerifier),
       });
-    } catch {
-      request.log.warn("Google identity exchange failed");
-      return sendSafeLoginOutcome(reply, transaction.returnTo, "unavailable");
-    }
+      if (existingBinding === undefined) {
+        setOAuthBindingCookie(reply, browserBinding, dependencies.secureCookies);
+      }
+      return reply.redirect(authorizationUrl);
+    });
 
-    if (!identity.emailVerified || identity.subject.trim() === "" || identity.email.trim() === "") {
-      return sendSafeLoginOutcome(reply, transaction.returnTo, "denied");
-    }
+    server.get("/auth/google/callback", async (request, reply) => {
+      const rateLimit = await checkLoginRateLimit(
+        dependencies,
+        `callback:${request.ip}`,
+        GOOGLE_LOGIN_CALLBACK_RATE_LIMIT,
+        request,
+      );
+      if (!rateLimit.allowed) {
+        return sendRateLimitedError(reply, rateLimit.retryAfterSeconds);
+      }
+      const state = readQueryString(request.query, "state");
+      const code = readQueryString(request.query, "code");
+      const providerError = readQueryString(request.query, "error");
+      const browserBinding = getCookie(request.headers.cookie, OAUTH_BROWSER_BINDING_COOKIE_NAME);
+      let transaction: OAuthTransaction | null = null;
+      if (state !== undefined && browserBinding !== undefined) {
+        try {
+          transaction = await dependencies.transactionStore.consume(
+            state,
+            browserBinding,
+            dependencies.now(),
+          );
+        } catch {
+          throw new DependencyUnavailableError();
+        }
+      }
 
-    const currentSession = await getActiveSession(request, dependencies);
-    let resolution: UserResolution;
-    try {
-      resolution = await dependencies.userDirectory.resolveGoogleIdentity(identity);
-    } catch {
-      throw new DependencyUnavailableError();
-    }
-    if (resolution.kind !== "authenticated") {
-      return sendSafeLoginOutcome(reply, transaction.returnTo, "denied");
-    }
-    if (
-      currentSession !== null &&
-      currentSession.principal.userId !== resolution.principal.userId
-    ) {
-      return sendSafeLoginOutcome(reply, transaction.returnTo, "failed");
-    }
+      if (state === undefined || transaction === null) {
+        return sendApiError(
+          reply,
+          400,
+          "AUTH_LOGIN_FAILED",
+          "Google sign-in could not be completed.",
+        );
+      }
+      if (providerError === "access_denied") {
+        return sendSafeLoginOutcome(reply, transaction.returnTo, "cancelled");
+      }
+      if (code === undefined) {
+        return sendSafeLoginOutcome(reply, transaction.returnTo, "failed");
+      }
 
-    let session: SessionRecord | null;
-    try {
-      session =
-        currentSession === null
-          ? await dependencies.sessionStore.create(resolution.principal, dependencies.now())
-          : await dependencies.sessionStore.rotate(
-              currentSession.sessionId,
-              resolution.principal,
-              dependencies.now(),
-            );
-    } catch {
-      throw new DependencyUnavailableError();
-    }
-    if (session === null) {
-      return sendSafeLoginOutcome(reply, transaction.returnTo, "failed");
-    }
+      const provider = dependencies.googleProvider;
+      const redirectUri = options.googleRedirectUri;
+      if (provider === undefined || redirectUri === undefined) {
+        return sendSafeLoginOutcome(reply, transaction.returnTo, "unavailable");
+      }
 
-    setSessionCookies(reply, session, dependencies.secureCookies);
-    return reply.redirect(transaction.returnTo);
-  });
+      let identity: VerifiedGoogleIdentity;
+      try {
+        identity = await provider.exchangeAuthorizationCode({
+          code,
+          redirectUri,
+          state,
+          nonce: transaction.nonce,
+          codeVerifier: transaction.codeVerifier,
+        });
+      } catch {
+        request.log.warn("Google identity exchange failed");
+        return sendSafeLoginOutcome(reply, transaction.returnTo, "unavailable");
+      }
+
+      if (
+        !identity.emailVerified ||
+        identity.subject.trim() === "" ||
+        identity.email.trim() === ""
+      ) {
+        return sendSafeLoginOutcome(reply, transaction.returnTo, "denied");
+      }
+
+      const currentSession = await getActiveSession(request, dependencies);
+      let resolution: UserResolution;
+      try {
+        resolution = await dependencies.userDirectory.resolveGoogleIdentity(identity);
+      } catch {
+        throw new DependencyUnavailableError();
+      }
+      if (resolution.kind !== "authenticated") {
+        return sendSafeLoginOutcome(reply, transaction.returnTo, "denied");
+      }
+      if (
+        currentSession !== null &&
+        currentSession.principal.userId !== resolution.principal.userId
+      ) {
+        return sendSafeLoginOutcome(reply, transaction.returnTo, "failed");
+      }
+
+      let session: SessionRecord | null;
+      try {
+        session =
+          currentSession === null
+            ? await dependencies.sessionStore.create(resolution.principal, dependencies.now())
+            : await dependencies.sessionStore.rotate(
+                currentSession.sessionId,
+                resolution.principal,
+                dependencies.now(),
+              );
+      } catch {
+        throw new DependencyUnavailableError();
+      }
+      if (session === null) {
+        return sendSafeLoginOutcome(reply, transaction.returnTo, "failed");
+      }
+
+      setSessionCookies(reply, session, dependencies.secureCookies);
+      return reply.redirect(transaction.returnTo);
+    });
+  }
 
   server.get("/api/v1/me/access", async (request, reply) => {
     const session = await getActiveSession(request, dependencies);

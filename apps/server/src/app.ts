@@ -1,6 +1,6 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
-import { env } from "@bcoz/config";
+import { env, type AuthPhase } from "@bcoz/config";
 import { createDatabaseClient, type PrismaClient } from "@bcoz/db";
 import {
   createAuthBoundaryDependencies,
@@ -21,11 +21,13 @@ import {
 
 export interface BuildServerOptions {
   auth?: AuthBoundaryOptions;
+  authPhase?: AuthPhase;
   readinessCheck?: ReadinessCheck;
   supabaseAuth?: SupabaseBearerAuthenticationDependencies;
 }
 
 export async function buildServer(options: BuildServerOptions = {}): Promise<FastifyInstance> {
+  const authPhase = options.authPhase ?? env.authPhase;
   const server = Fastify({
     logger: {
       level: env.nodeEnv === "development" ? "info" : "warn",
@@ -84,19 +86,24 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
       allowedOrigins: env.webOrigins,
       googleClientId: env.googleClientId,
       googleRedirectUri: env.googleRedirectUri,
+      enableGoogleRoutes: authPhase === "fastify",
     });
-    if (options.supabaseAuth !== undefined) {
-      registerSupabaseIdentityRoute(server, options.supabaseAuth);
-    } else if (env.supabaseUrl !== undefined) {
-      const mappingDatabase = options.auth?.prisma ?? ownedPrisma;
-      if (mappingDatabase === undefined) {
-        throw new Error("SUPABASE_URL requires a durable database for identity mappings.");
+    if (authPhase === "supabase") {
+      if (options.supabaseAuth !== undefined) {
+        registerSupabaseIdentityRoute(server, options.supabaseAuth);
+      } else {
+        const mappingDatabase = options.auth?.prisma ?? ownedPrisma;
+        if (mappingDatabase === undefined || env.supabaseUrl === undefined) {
+          throw new Error(
+            "AUTH_PHASE=supabase requires SUPABASE_URL and a durable database for identity mappings.",
+          );
+        }
+        registerSupabaseIdentityRoute(server, {
+          tokenVerifier: new SupabaseAccessTokenVerifier({ supabaseUrl: env.supabaseUrl }),
+          identityDirectory: new PrismaSupabaseAuthIdentityDirectory(mappingDatabase),
+          userDirectory: authDependencies.userDirectory,
+        });
       }
-      registerSupabaseIdentityRoute(server, {
-        tokenVerifier: new SupabaseAccessTokenVerifier({ supabaseUrl: env.supabaseUrl }),
-        identityDirectory: new PrismaSupabaseAuthIdentityDirectory(mappingDatabase),
-        userDirectory: authDependencies.userDirectory,
-      });
     }
   } catch (error: unknown) {
     if (ownedPrisma !== undefined) {

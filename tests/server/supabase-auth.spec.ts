@@ -5,6 +5,7 @@ import type { AuthenticatedPrincipal } from "@bcoz/auth";
 import {
   InvalidSupabaseAccessTokenError,
   SupabaseAccessTokenVerifier,
+  SupabaseVerifierUnavailableError,
   registerSupabaseIdentityRoute,
   resolveSupabaseBearerPrincipal,
   type SupabaseAuthIdentityDirectory,
@@ -42,9 +43,10 @@ function createToken(
   },
   algorithm = "RS256",
   signingKey = keyPair.privateKey,
+  keyId = "test-key",
 ): string {
   const encodedHeader = Buffer.from(
-    JSON.stringify({ alg: algorithm, kid: "test-key", typ: "JWT" }),
+    JSON.stringify({ alg: algorithm, kid: keyId, typ: "JWT" }),
   ).toString("base64url");
   const encodedClaims = Buffer.from(JSON.stringify(claims)).toString("base64url");
   const signingInput = `${encodedHeader}.${encodedClaims}`;
@@ -98,6 +100,7 @@ describe("Supabase temporary bearer authentication", () => {
     ["a mismatched audience", { aud: "service_role" }],
     ["a privileged service role", { role: "service_role" }],
     ["an expired token", { exp: NOW / 1_000 - 1 }],
+    ["a not-yet-valid token", { nbf: NOW / 1_000 + 1 }],
     ["a non-UUID subject", { sub: "not-a-uuid" }],
   ])("rejects a token with %s", async (_description, claimOverride) => {
     const verifier = new SupabaseAccessTokenVerifier({
@@ -118,6 +121,18 @@ describe("Supabase temporary bearer authentication", () => {
     await expect(verifier.verify(createToken(claims))).rejects.toBeInstanceOf(
       InvalidSupabaseAccessTokenError,
     );
+  });
+
+  it("rejects a token with an unknown signing key", async () => {
+    const verifier = new SupabaseAccessTokenVerifier({
+      supabaseUrl: "https://project.supabase.co",
+      now: () => NOW,
+      fetcher: fetchJwks,
+    });
+
+    await expect(
+      verifier.verify(createToken(undefined, "RS256", keyPair.privateKey, "unknown")),
+    ).rejects.toBeInstanceOf(InvalidSupabaseAccessTokenError);
   });
 
   it("rejects legacy HMAC tokens even if their claims look valid", async () => {
@@ -195,6 +210,95 @@ describe("Supabase temporary bearer authentication", () => {
     });
 
     expect(resolved).toBeNull();
+  });
+
+  it("denies disabled users and reloads changed local permissions", async () => {
+    let principal: AuthenticatedPrincipal = {
+      userId: APPLICATION_USER_ID,
+      email: "participant@example.test",
+      status: "active",
+      roles: ["participant"],
+      permissions: [],
+    };
+    const dependencies = {
+      tokenVerifier: new SupabaseAccessTokenVerifier({
+        supabaseUrl: "https://project.supabase.co",
+        now: () => NOW,
+        fetcher: fetchJwks,
+      }),
+      identityDirectory: {
+        resolveApplicationUserId: async () => APPLICATION_USER_ID,
+      },
+      userDirectory: {
+        resolveGoogleIdentity: async () => ({ kind: "email_collision" as const }),
+        getPrincipal: async () => (principal.status === "active" ? principal : null),
+      },
+    };
+
+    await expect(
+      resolveSupabaseBearerPrincipal(`Bearer ${createToken()}`, dependencies),
+    ).resolves.toEqual(principal);
+    principal = {
+      ...principal,
+      permissions: [{ code: "application_read", effect: "allow" }],
+    };
+    await expect(
+      resolveSupabaseBearerPrincipal(`Bearer ${createToken()}`, dependencies),
+    ).resolves.toEqual(principal);
+    principal = { ...principal, status: "disabled" };
+    await expect(
+      resolveSupabaseBearerPrincipal(`Bearer ${createToken()}`, dependencies),
+    ).resolves.toBeNull();
+  });
+
+  it.each([
+    [
+      "unavailable JWKS",
+      async () => {
+        throw new Error("network unavailable");
+      },
+    ],
+    [
+      "invalid JWKS",
+      async () =>
+        new Response(JSON.stringify({ keys: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    ],
+  ])("returns a safe 503 for %s", async (_description, fetcher) => {
+    const server = Fastify();
+    registerSupabaseIdentityRoute(server, {
+      tokenVerifier: new SupabaseAccessTokenVerifier({
+        supabaseUrl: "https://project.supabase.co",
+        now: () => NOW,
+        fetcher,
+      }),
+      identityDirectory: {
+        resolveApplicationUserId: async () => APPLICATION_USER_ID,
+      },
+      userDirectory: {
+        resolveGoogleIdentity: async () => ({ kind: "email_collision" }),
+        getPrincipal: async () => null,
+      },
+    });
+    server.setErrorHandler((error, _request, reply) => {
+      if (error instanceof SupabaseVerifierUnavailableError) {
+        return reply.code(503).send({ error: { code: "DEPENDENCY_UNAVAILABLE" } });
+      }
+      throw error;
+    });
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/v1/auth/supabase/session",
+      headers: { authorization: `Bearer ${createToken()}` },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({ error: { code: "DEPENDENCY_UNAVAILABLE" } });
+    expect(response.body).not.toContain("network unavailable");
+    await server.close();
   });
 
   it("serves the mapped local identity without returning Supabase claims or token", async () => {

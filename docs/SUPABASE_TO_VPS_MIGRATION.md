@@ -62,6 +62,12 @@ Keep these boundaries in place from the first release so the later migration has
 
 ### Supabase token-signing prerequisite
 
+Set `AUTH_PHASE=supabase` while Supabase Auth remains the identity provider and
+the temporary Fastify bridge is enabled. Set `AUTH_PHASE=fastify` only after the
+final Fastify OIDC cutover. The server registers Google login routes only in the
+`fastify` phase; the Supabase bridge phase exposes the bearer identity route and
+does not expose `/auth/google/start` or `/auth/google/callback`.
+
 The temporary Fastify bridge in this repository accepts **RS256 asymmetric
 signing keys only**. It obtains the project's public keys from
 `<SUPABASE_URL>/auth/v1/.well-known/jwks.json`, then verifies the exact issuer
