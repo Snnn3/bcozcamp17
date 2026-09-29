@@ -107,6 +107,7 @@ model User {
   uploadIntents         UploadIntent[]            @relation("UploadInitiator")
   idempotencyRecords    IdempotencyRecord[]
   authSessions          AuthSession[]
+  supabaseAuthIdentity  SupabaseAuthIdentityMapping?
 
   @@map("users")
 }
@@ -137,6 +138,25 @@ model AuthOAuthTransaction {
 
   @@index([expiresAt])
   @@map("auth_oauth_transactions")
+}
+
+model SupabaseAuthIdentityMapping {
+  supabaseUserId String   @id @map("supabase_user_id") @db.Uuid
+  userId         String   @unique @map("user_id") @db.Uuid
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("supabase_auth_identity_mappings")
+}
+
+model LoginRateLimitBucket {
+  key             String   @id @db.VarChar(64)
+  windowStartedAt DateTime @map("window_started_at") @db.Timestamptz(3)
+  requestCount    Int      @map("request_count")
+  updatedAt       DateTime @map("updated_at") @db.Timestamptz(3)
+
+  @@index([windowStartedAt])
+  @@map("login_rate_limit_buckets")
 }
 
 model Role {

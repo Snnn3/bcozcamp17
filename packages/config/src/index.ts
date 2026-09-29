@@ -10,6 +10,22 @@ const optionalUrl = z.preprocess(
   (value: unknown) => (value === "" ? undefined : value),
   z.string().url().optional(),
 );
+const optionalSupabaseProjectUrl = optionalUrl.refine((value) => {
+  if (value === undefined) {
+    return true;
+  }
+  const url = new URL(value);
+  const localHttpAllowed =
+    url.protocol === "http:" && ["localhost", "127.0.0.1"].includes(url.hostname);
+  return (
+    (url.protocol === "https:" || localHttpAllowed) &&
+    url.username === "" &&
+    url.password === "" &&
+    url.pathname === "/" &&
+    url.search === "" &&
+    url.hash === ""
+  );
+}, "SUPABASE_URL must be an HTTPS project origin (or local HTTP origin).");
 const storageEndpoint = optionalUrl.refine((value) => {
   if (value === undefined) {
     return true;
@@ -49,9 +65,11 @@ const booleanFromEnvironment = z.preprocess((value: unknown) => {
   }
   return value;
 }, z.boolean().default(true));
+const authPhase = z.enum(["supabase", "fastify"]).default("fastify");
 
 const environmentInputSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  AUTH_PHASE: authPhase,
   PORT: z.coerce.number().int().min(1).max(65_535).default(3_000),
   WEB_ORIGINS: z.string().default("http://localhost:5173,http://localhost:5174"),
   DATABASE_URL: optionalNonEmptyString,
@@ -65,10 +83,12 @@ const environmentInputSchema = z.object({
   GOOGLE_CLIENT_ID: optionalNonEmptyString,
   GOOGLE_CLIENT_SECRET: optionalNonEmptyString,
   GOOGLE_REDIRECT_URI: optionalUrl,
+  SUPABASE_URL: optionalSupabaseProjectUrl,
 });
 
 export const environmentSchema = environmentInputSchema.transform((input) => ({
   nodeEnv: input.NODE_ENV,
+  authPhase: input.AUTH_PHASE,
   port: input.PORT,
   webOrigins: parseWebOrigins(input.WEB_ORIGINS),
   databaseUrl: input.DATABASE_URL,
@@ -82,9 +102,11 @@ export const environmentSchema = environmentInputSchema.transform((input) => ({
   googleClientId: input.GOOGLE_CLIENT_ID,
   googleClientSecret: input.GOOGLE_CLIENT_SECRET,
   googleRedirectUri: input.GOOGLE_REDIRECT_URI,
+  supabaseUrl: input.SUPABASE_URL,
 }));
 
 export type Environment = z.infer<typeof environmentSchema>;
+export type AuthPhase = z.infer<typeof authPhase>;
 
 export function loadEnvironmentFile(filePath: string = resolve(process.cwd(), ".env")): void {
   if (existsSync(filePath)) {
@@ -103,7 +125,14 @@ export function parseEnvironment(input: NodeJS.ProcessEnv = process.env): Enviro
     );
   }
 
+  if (environment.authPhase === "supabase" && environment.supabaseUrl === undefined) {
+    throw new Error("SUPABASE_URL is required when AUTH_PHASE is supabase.");
+  }
+
   if (environment.nodeEnv === "production") {
+    if (input.AUTH_PHASE === undefined) {
+      throw new Error("Production AUTH_PHASE must be explicitly configured.");
+    }
     if (input.WEB_ORIGINS === undefined) {
       throw new Error("Production WEB_ORIGINS must be explicitly configured.");
     }
@@ -119,15 +148,25 @@ export function parseEnvironment(input: NodeJS.ProcessEnv = process.env): Enviro
     ) {
       throw new Error("Production STORAGE_ENDPOINT must use HTTPS.");
     }
+    if (
+      environment.supabaseUrl !== undefined &&
+      new URL(environment.supabaseUrl).protocol !== "https:"
+    ) {
+      throw new Error("Production SUPABASE_URL must use HTTPS.");
+    }
     const missingProductionValues = [
       ["DATABASE_URL", environment.databaseUrl],
       ["SESSION_SECRET", environment.sessionSecret],
       ["STORAGE_ENDPOINT", environment.storageEndpoint],
       ["STORAGE_ACCESS_KEY_ID", environment.storageAccessKeyId],
       ["STORAGE_SECRET_ACCESS_KEY", environment.storageSecretAccessKey],
-      ["GOOGLE_CLIENT_ID", environment.googleClientId],
-      ["GOOGLE_CLIENT_SECRET", environment.googleClientSecret],
-      ["GOOGLE_REDIRECT_URI", environment.googleRedirectUri],
+      ...(environment.authPhase === "fastify"
+        ? [
+            ["GOOGLE_CLIENT_ID", environment.googleClientId],
+            ["GOOGLE_CLIENT_SECRET", environment.googleClientSecret],
+            ["GOOGLE_REDIRECT_URI", environment.googleRedirectUri],
+          ]
+        : []),
     ].filter(([, value]) => value === undefined);
 
     if (missingProductionValues.length > 0) {

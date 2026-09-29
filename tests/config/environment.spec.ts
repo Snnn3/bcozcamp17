@@ -62,6 +62,23 @@ describe("environment setup", () => {
     expect(environment.storageForcePathStyle).toBe(false);
   });
 
+  it("requires a Supabase project URL for the Supabase auth phase", () => {
+    expect(() =>
+      parseEnvironment({
+        ...process.env,
+        AUTH_PHASE: "supabase",
+        SUPABASE_URL: "",
+      }),
+    ).toThrow("SUPABASE_URL is required");
+
+    const environment = parseEnvironment({
+      ...process.env,
+      AUTH_PHASE: "supabase",
+      SUPABASE_URL: "https://project.supabase.co",
+    });
+    expect(environment.authPhase).toBe("supabase");
+  });
+
   it("requires storage credentials to be supplied as a pair", () => {
     expect(() =>
       parseEnvironment({
@@ -121,6 +138,7 @@ describe("environment setup", () => {
       parseEnvironment({
         ...process.env,
         NODE_ENV: "production",
+        AUTH_PHASE: "fastify",
         STORAGE_FORCE_PATH_STYLE: "true",
         WEB_ORIGINS: "https://app.example.test",
       }),
@@ -129,16 +147,40 @@ describe("environment setup", () => {
       parseEnvironment({
         ...process.env,
         NODE_ENV: "production",
+        AUTH_PHASE: "fastify",
         STORAGE_FORCE_PATH_STYLE: "false",
         WEB_ORIGINS: "http://app.example.test",
       }),
     ).toThrow("WEB_ORIGINS must use HTTPS");
   });
 
+  it("requires an explicit authentication phase in production", () => {
+    const productionInput: NodeJS.ProcessEnv = {
+      ...process.env,
+      NODE_ENV: "production",
+      WEB_ORIGINS: "https://app.example.test",
+      DATABASE_URL: "postgresql://user:password@db.example.test:5432/bcoz",
+      SESSION_SECRET: "a-production-session-secret-value",
+      STORAGE_ENDPOINT: "https://storage.example.test",
+      STORAGE_ACCESS_KEY_ID: "production-access",
+      STORAGE_SECRET_ACCESS_KEY: "production-secret",
+      STORAGE_FORCE_PATH_STYLE: "false",
+      GOOGLE_CLIENT_ID: "production-client",
+      GOOGLE_CLIENT_SECRET: "production-secret",
+      GOOGLE_REDIRECT_URI: "https://api.example.test/auth/google/callback",
+    };
+    delete productionInput.AUTH_PHASE;
+
+    expect(() => parseEnvironment(productionInput)).toThrow(
+      "Production AUTH_PHASE must be explicitly configured.",
+    );
+  });
+
   it("rejects omitted production origins instead of inheriting localhost defaults", () => {
     const productionInput: NodeJS.ProcessEnv = {
       ...process.env,
       NODE_ENV: "production",
+      AUTH_PHASE: "fastify",
       DATABASE_URL: "postgresql://user:password@db.example.test:5432/bcoz",
       SESSION_SECRET: "a-production-session-secret-value",
       STORAGE_ENDPOINT: "https://storage.example.test",
@@ -160,6 +202,7 @@ describe("environment setup", () => {
     const environment = parseEnvironment({
       ...process.env,
       NODE_ENV: "production",
+      AUTH_PHASE: "fastify",
       WEB_ORIGINS: "https://app.example.test,https://staff.example.test/",
       DATABASE_URL: "postgresql://user:password@db.example.test:5432/bcoz",
       SESSION_SECRET: "a-production-session-secret-value",
@@ -177,6 +220,28 @@ describe("environment setup", () => {
       "https://staff.example.test",
     ]);
     expect(environment.storageForcePathStyle).toBe(false);
+  });
+
+  it("does not require Google provider settings during the Supabase phase", () => {
+    const environment = parseEnvironment({
+      ...process.env,
+      NODE_ENV: "production",
+      AUTH_PHASE: "supabase",
+      WEB_ORIGINS: "https://app.example.test,https://staff.example.test/",
+      DATABASE_URL: "postgresql://user:password@db.example.test:5432/bcoz",
+      SESSION_SECRET: "a-production-session-secret-value",
+      STORAGE_ENDPOINT: "https://storage.example.test",
+      STORAGE_ACCESS_KEY_ID: "production-access",
+      STORAGE_SECRET_ACCESS_KEY: "production-secret",
+      STORAGE_FORCE_PATH_STYLE: "false",
+      GOOGLE_CLIENT_ID: "",
+      GOOGLE_CLIENT_SECRET: "",
+      GOOGLE_REDIRECT_URI: "",
+      SUPABASE_URL: "https://project.supabase.co",
+    });
+
+    expect(environment.authPhase).toBe("supabase");
+    expect(environment.googleClientId).toBeUndefined();
   });
 
   it("rejects storage endpoint credentials and whitespace-only secrets centrally", () => {

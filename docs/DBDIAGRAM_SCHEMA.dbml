@@ -125,6 +125,25 @@ Table auth_oauth_transactions {
   }
 }
 
+// Temporary Supabase Auth UUID mapping; only a trusted provisioning process may write it.
+Table supabase_auth_identity_mappings {
+  supabase_user_id uuid [pk, note: 'Subject from a signature-verified Supabase access token']
+  user_id uuid [not null, unique, note: 'Permanent application user ID; never resolved from email']
+  created_at timestamptz [not null]
+}
+
+// Shared Fastify rate-limit state; key is a digest, not the raw client IP.
+Table login_rate_limit_buckets {
+  key varchar(64) [pk]
+  window_started_at timestamptz [not null]
+  request_count int [not null, note: 'Positive fixed-window count, atomically incremented']
+  updated_at timestamptz [not null]
+
+  indexes {
+    (window_started_at)
+  }
+}
+
 Table roles {
   id uuid [pk]
   code varchar(30) [not null, unique, note: 'Seed participant, staff, and admin']
@@ -502,6 +521,7 @@ Ref: upload_intents.application_document_id > application_documents.id
 Ref: upload_intents.uploaded_by > users.id
 Ref: upload_intents.(application_document_id, result_submission_id) - document_submissions.(application_document_id, id)
 Ref: idempotency_records.actor_id > users.id
+Ref: supabase_auth_identity_mappings.user_id > users.id
 
 // Migration constraints/triggers in CAMP_DATABASE_SCHEMA.md section 15 are mandatory:
 // same-document current/review/intent pointers; choice membership/cardinality;

@@ -14,8 +14,9 @@ QR/check-in, missions, evaluation, buddy features, and spin wheel endpoints are 
 
 ## 2. API Principles
 
-- The API Server is authoritative for validation, permissions, status transitions, and transactions.
+- The application API is authoritative for validation, permissions, status transitions, and transactions. It is Supabase Edge Functions initially and Fastify after the VPS cutover.
 - Participant Web and Staff Web never connect directly to PostgreSQL; object access uses API-authorized short-lived signed URLs only.
+- Browser clients call Edge Functions only during the Supabase phase; direct PostgREST/Data API access to application tables is disabled.
 - All timestamps are ISO 8601 UTC values.
 - All IDs are opaque UUIDs unless a public application code is explicitly returned.
 - Applicant-facing responses never include internal Staff notes, raw storage keys, or private implementation details.
@@ -26,15 +27,29 @@ QR/check-in, missions, evaluation, buddy features, and spin wheel endpoints are 
 
 ## 3. Authentication and Headers
 
-Google login is confirmed for Participant, Staff, and Admin. Use server-side Google OpenID Connect authorization-code flow and a local server-managed session, as specified in PROJECT_SPEC section 19. The auth library and its exact mounted routes are implementation decisions; the domain API must not accept an arbitrary Google token as a substitute for its local session.
+Authentication is phased. Initially, Supabase Auth provides Google login and browser requests to Edge Functions include a Supabase access token. Edge Functions must validate the token with Supabase Auth, resolve its `sub` using the trusted `supabase_auth_identity_mappings` table, and load the current application roles and permissions from PostgreSQL. Application authorization must never use browser-supplied user IDs, roles, editable user metadata, or email matching.
 
-Required headers:
+During the API/database cutover, the browser continues sending the Supabase access token as a bearer token to Fastify. Fastify accepts only RS256-signed tokens from the configured `SUPABASE_URL`, with issuer `<SUPABASE_URL>/auth/v1`, audience and role `authenticated`, a valid signature from `<SUPABASE_URL>/auth/v1/.well-known/jwks.json`, a future expiry, and a UUID subject. It resolves the subject through the unique Supabase-to-application mapping and reloads current roles and permissions. Legacy HS256 tokens and service-role tokens are rejected. The Supabase project must be configured for asymmetric RS256 signing before this bridge is enabled.
+
+After the authentication cutover, use server-side Google OpenID Connect authorization-code flow and a local server-managed session, as specified in PROJECT_SPEC section 19. Do not accept a Google token as a substitute for the local session in that final phase.
+
+Initial Supabase and temporary Fastify bridge headers:
+
+```http
+Accept: application/json
+Authorization: Bearer <supabase-access-token>
+Content-Type: application/json
+```
+
+Final Fastify session headers:
 
 ```http
 Accept: application/json
 Content-Type: application/json
-Cookie: session=<secure-session-cookie>
+Cookie: bcoz_session=<secure-session-cookie>
 ```
+
+Fastify exposes `GET /api/v1/auth/supabase/session` as a temporary identity-check endpoint. It returns the mapped application user and current local permissions, never token claims or the Supabase subject. The same verifier and mapping lookup must protect all business routes during the bridge phase; this endpoint alone is not a substitute for route-level authorization.
 
 For direct file upload, the client uses the short-lived URL returned by the API. It must not send permanent storage credentials to the browser.
 
@@ -44,12 +59,17 @@ protocol-relative values, and alternate ports are rejected. Production
 allowlisted origins must use HTTPS; local development may use HTTP localhost
 origins.
 
-Google login initiation and callback are rate-limited independently. The
-development baseline is 10 initiation requests and 20 callback requests per
-minute per client IP; production may use a stricter centrally configured limit.
-An exceeded limit returns `429` with `error.code = RATE_LIMITED`, a safe message,
-a request ID, and a numeric `Retry-After` header. The limiter must be shared or
-otherwise coordinated across API instances before production launch.
+Rate limiting is phase-specific. During the initial Supabase phase, Supabase
+Auth owns the Google login flow and its provider login limits; the application
+does not expose `/auth/google/start` or `/auth/google/callback`. The temporary
+Fastify bearer bridge also does not expose those login routes. After the final
+Fastify OIDC cutover, the application-owned login initiation and callback
+endpoints are rate-limited independently using a shared or otherwise
+coordinated limiter across API instances. The development baseline is 10
+initiation requests and 20 callback requests per minute per client IP;
+production may use a stricter centrally configured limit. An exceeded limit
+returns `429` with `error.code = RATE_LIMITED`, a safe message, a request ID,
+and a numeric `Retry-After` header.
 
 For submission, upload completion, review, and final decision operations, the client must send:
 
@@ -500,7 +520,7 @@ Error codes are stable API contracts. Human-readable messages may be localized.
 
 - Require HTTPS outside local development.
 - Use secure, HttpOnly, SameSite session cookies where cookie sessions are selected.
-- Apply rate limits to Google login initiation/callback, upload intent, submission, review, and export endpoints; return `429` with `Retry-After`.
+- Apply shared rate limits to the application-owned Google login initiation/callback endpoints after the final Fastify OIDC cutover; initial Supabase Auth login limits are provider-owned. Also limit upload intent, submission, review, and export endpoints; return `429` with `Retry-After`.
 - Use CSRF protection appropriate to the authentication design.
 - Validate credentialed CORS and callback return destinations against exact configured origins; production origins must be explicit HTTPS values.
 - Verify participant ownership and role/permission server-side.
@@ -592,29 +612,33 @@ Existing errors map as follows: stale versions, invalid transitions, closed regi
 
 ## 12. Google authentication integration contract
 
-This release selects Google's `google-auth-library` as the provider integration
-for authorization-code exchange, ID-token verification, nonce validation, and
-Google key rotation. The application owns only the local boundary around that
-provider client: it persists `auth_sessions` and
+After the final Fastify OIDC cutover, Fastify uses Google's
+`google-auth-library` as the provider integration for authorization-code
+exchange, ID-token verification, nonce validation, and Google key rotation.
+The application owns only the local boundary around that provider client: it persists `auth_sessions` and
 `auth_oauth_transactions` with the Prisma migrations, provisions the local
 `users` row, and exposes the exact paths below. There is one OAuth handler; no
 second provider or password/session handler is allowed.
 
 | Local operation | Exact path | Selected-library boundary |
 |---|---|---|
-| Start Google login | `GET /auth/google/start` | Creates the browser-bound state/nonce/PKCE transaction and calls the Google client URL contract |
-| Google callback | `GET /auth/google/callback` | Exchanges the code and verifies the ID token with `google-auth-library` |
+| Start Google login (final Fastify phase) | `GET /auth/google/start` | Creates the browser-bound state/nonce/PKCE transaction and calls the Google client URL contract |
+| Google callback (final Fastify phase) | `GET /auth/google/callback` | Exchanges the code and verifies the ID token with `google-auth-library` |
 | Read local session | `GET /api/v1/auth/session` | Reads the Prisma-backed local session and current permissions |
 | Logout | `POST /api/v1/auth/logout` | Revokes the Prisma-backed local session after CSRF validation |
 
 The route mapping and redirect URI must match the Google Cloud configuration.
 
-The login initiation and callback endpoints use the rate limits in section 3.
-Callback failures use only the allowlisted stored frontend destination and a
-safe outcome (`cancelled`, `failed`, `unavailable`, or `denied`) plus the API
-request ID. Provider error descriptions/codes are ignored and never copied to
-the redirect query. If no valid transaction exists, return the normal safe API
-error envelope with a request ID instead of redirecting to an untrusted value.
+These application-owned login initiation and callback endpoints exist only
+after the final Fastify OIDC cutover. They use the shared rate limits in
+section 3; during the initial Supabase phase, Supabase Auth owns and limits the
+Google login flow, and the temporary Fastify bearer bridge does not expose
+these login routes. Callback failures use only the allowlisted stored frontend
+destination and a safe outcome (`cancelled`, `failed`, `unavailable`, or
+`denied`) plus the API request ID. Provider error descriptions/codes are
+ignored and never copied to the redirect query. If no valid transaction
+exists, return the normal safe API error envelope with a request ID instead of
+redirecting to an untrusted value.
 
 | Operation | Required behavior |
 |---|---|
