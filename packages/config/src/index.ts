@@ -10,6 +10,22 @@ const optionalUrl = z.preprocess(
   (value: unknown) => (value === "" ? undefined : value),
   z.string().url().optional(),
 );
+const optionalSupabaseProjectUrl = optionalUrl.refine((value) => {
+  if (value === undefined) {
+    return true;
+  }
+  const url = new URL(value);
+  const localHttpAllowed =
+    url.protocol === "http:" && ["localhost", "127.0.0.1"].includes(url.hostname);
+  return (
+    (url.protocol === "https:" || localHttpAllowed) &&
+    url.username === "" &&
+    url.password === "" &&
+    url.pathname === "/" &&
+    url.search === "" &&
+    url.hash === ""
+  );
+}, "SUPABASE_URL must be an HTTPS project origin (or local HTTP origin).");
 const storageEndpoint = optionalUrl.refine((value) => {
   if (value === undefined) {
     return true;
@@ -65,6 +81,7 @@ const environmentInputSchema = z.object({
   GOOGLE_CLIENT_ID: optionalNonEmptyString,
   GOOGLE_CLIENT_SECRET: optionalNonEmptyString,
   GOOGLE_REDIRECT_URI: optionalUrl,
+  SUPABASE_URL: optionalSupabaseProjectUrl,
 });
 
 export const environmentSchema = environmentInputSchema.transform((input) => ({
@@ -82,6 +99,7 @@ export const environmentSchema = environmentInputSchema.transform((input) => ({
   googleClientId: input.GOOGLE_CLIENT_ID,
   googleClientSecret: input.GOOGLE_CLIENT_SECRET,
   googleRedirectUri: input.GOOGLE_REDIRECT_URI,
+  supabaseUrl: input.SUPABASE_URL,
 }));
 
 export type Environment = z.infer<typeof environmentSchema>;
@@ -118,6 +136,12 @@ export function parseEnvironment(input: NodeJS.ProcessEnv = process.env): Enviro
       new URL(environment.storageEndpoint).protocol !== "https:"
     ) {
       throw new Error("Production STORAGE_ENDPOINT must use HTTPS.");
+    }
+    if (
+      environment.supabaseUrl !== undefined &&
+      new URL(environment.supabaseUrl).protocol !== "https:"
+    ) {
+      throw new Error("Production SUPABASE_URL must use HTTPS.");
     }
     const missingProductionValues = [
       ["DATABASE_URL", environment.databaseUrl],

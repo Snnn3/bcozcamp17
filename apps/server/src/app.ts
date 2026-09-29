@@ -12,10 +12,17 @@ import {
 import { DependencyUnavailableError } from "@bcoz/api";
 import { createCampSettingsReadinessCheck, type ReadinessCheck } from "./readiness.js";
 import { registerHealthRoute } from "./routes/health.js";
+import {
+  PrismaSupabaseAuthIdentityDirectory,
+  SupabaseAccessTokenVerifier,
+  registerSupabaseIdentityRoute,
+  type SupabaseBearerAuthenticationDependencies,
+} from "./supabaseAuth.js";
 
 export interface BuildServerOptions {
   auth?: AuthBoundaryOptions;
   readinessCheck?: ReadinessCheck;
+  supabaseAuth?: SupabaseBearerAuthenticationDependencies;
 }
 
 export async function buildServer(options: BuildServerOptions = {}): Promise<FastifyInstance> {
@@ -66,21 +73,31 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
       await readinessCheck();
     }
     await registerHealthRoute(server, readinessCheck === undefined ? {} : { readinessCheck });
-    registerAuthRoutes(
-      server,
-      createAuthBoundaryDependencies({
-        ...options.auth,
-        ...(ownedPrisma === undefined ? {} : { prisma: ownedPrisma }),
-        googleProvider,
-        production: env.nodeEnv === "production",
-        secureCookies: options.auth?.secureCookies ?? env.nodeEnv === "production",
-      }),
-      {
-        allowedOrigins: env.webOrigins,
-        googleClientId: env.googleClientId,
-        googleRedirectUri: env.googleRedirectUri,
-      },
-    );
+    const authDependencies = createAuthBoundaryDependencies({
+      ...options.auth,
+      ...(ownedPrisma === undefined ? {} : { prisma: ownedPrisma }),
+      googleProvider,
+      production: env.nodeEnv === "production",
+      secureCookies: options.auth?.secureCookies ?? env.nodeEnv === "production",
+    });
+    registerAuthRoutes(server, authDependencies, {
+      allowedOrigins: env.webOrigins,
+      googleClientId: env.googleClientId,
+      googleRedirectUri: env.googleRedirectUri,
+    });
+    if (options.supabaseAuth !== undefined) {
+      registerSupabaseIdentityRoute(server, options.supabaseAuth);
+    } else if (env.supabaseUrl !== undefined) {
+      const mappingDatabase = options.auth?.prisma ?? ownedPrisma;
+      if (mappingDatabase === undefined) {
+        throw new Error("SUPABASE_URL requires a durable database for identity mappings.");
+      }
+      registerSupabaseIdentityRoute(server, {
+        tokenVerifier: new SupabaseAccessTokenVerifier({ supabaseUrl: env.supabaseUrl }),
+        identityDirectory: new PrismaSupabaseAuthIdentityDirectory(mappingDatabase),
+        userDirectory: authDependencies.userDirectory,
+      });
+    }
   } catch (error: unknown) {
     if (ownedPrisma !== undefined) {
       await ownedPrisma.$disconnect();

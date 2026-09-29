@@ -14,8 +14,9 @@ QR/check-in, missions, evaluation, buddy features, and spin wheel endpoints are 
 
 ## 2. API Principles
 
-- The API Server is authoritative for validation, permissions, status transitions, and transactions.
+- The application API is authoritative for validation, permissions, status transitions, and transactions. It is Supabase Edge Functions initially and Fastify after the VPS cutover.
 - Participant Web and Staff Web never connect directly to PostgreSQL; object access uses API-authorized short-lived signed URLs only.
+- Browser clients call Edge Functions only during the Supabase phase; direct PostgREST/Data API access to application tables is disabled.
 - All timestamps are ISO 8601 UTC values.
 - All IDs are opaque UUIDs unless a public application code is explicitly returned.
 - Applicant-facing responses never include internal Staff notes, raw storage keys, or private implementation details.
@@ -26,15 +27,29 @@ QR/check-in, missions, evaluation, buddy features, and spin wheel endpoints are 
 
 ## 3. Authentication and Headers
 
-Google login is confirmed for Participant, Staff, and Admin. Use server-side Google OpenID Connect authorization-code flow and a local server-managed session, as specified in PROJECT_SPEC section 19. The auth library and its exact mounted routes are implementation decisions; the domain API must not accept an arbitrary Google token as a substitute for its local session.
+Authentication is phased. Initially, Supabase Auth provides Google login and browser requests to Edge Functions include a Supabase access token. Edge Functions must validate the token with Supabase Auth, resolve its `sub` using the trusted `supabase_auth_identity_mappings` table, and load the current application roles and permissions from PostgreSQL. Application authorization must never use browser-supplied user IDs, roles, editable user metadata, or email matching.
 
-Required headers:
+During the API/database cutover, the browser continues sending the Supabase access token as a bearer token to Fastify. Fastify accepts only RS256-signed tokens from the configured `SUPABASE_URL`, with issuer `<SUPABASE_URL>/auth/v1`, audience and role `authenticated`, a valid signature from `<SUPABASE_URL>/auth/v1/.well-known/jwks.json`, a future expiry, and a UUID subject. It resolves the subject through the unique Supabase-to-application mapping and reloads current roles and permissions. Legacy HS256 tokens and service-role tokens are rejected. The Supabase project must be configured for asymmetric RS256 signing before this bridge is enabled.
+
+After the authentication cutover, use server-side Google OpenID Connect authorization-code flow and a local server-managed session, as specified in PROJECT_SPEC section 19. Do not accept a Google token as a substitute for the local session in that final phase.
+
+Initial Supabase and temporary Fastify bridge headers:
+
+```http
+Accept: application/json
+Authorization: Bearer <supabase-access-token>
+Content-Type: application/json
+```
+
+Final Fastify session headers:
 
 ```http
 Accept: application/json
 Content-Type: application/json
-Cookie: session=<secure-session-cookie>
+Cookie: bcoz_session=<secure-session-cookie>
 ```
+
+Fastify exposes `GET /api/v1/auth/supabase/session` as a temporary identity-check endpoint. It returns the mapped application user and current local permissions, never token claims or the Supabase subject. The same verifier and mapping lookup must protect all business routes during the bridge phase; this endpoint alone is not a substitute for route-level authorization.
 
 For direct file upload, the client uses the short-lived URL returned by the API. It must not send permanent storage credentials to the browser.
 

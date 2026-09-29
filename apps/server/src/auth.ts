@@ -60,6 +60,58 @@ export class InMemoryLoginRateLimiter implements LoginRateLimiter {
   }
 }
 
+export class PrismaLoginRateLimiter implements LoginRateLimiter {
+  public constructor(private readonly prisma: PrismaClient) {}
+
+  public async consume(
+    key: string,
+    now: number,
+    maximumRequests: number,
+    windowMs: number,
+  ): Promise<LoginRateLimitResult> {
+    if (key.trim() === "" || maximumRequests < 1 || windowMs < 1 || !Number.isFinite(now)) {
+      throw new Error("Login rate limit inputs are invalid.");
+    }
+
+    const windowStartedAtMs = Math.floor(now / windowMs) * windowMs;
+    const rows = await this.prisma.$queryRaw<Array<{ request_count: number }>>`
+      INSERT INTO login_rate_limit_buckets (
+        key,
+        window_started_at,
+        request_count,
+        updated_at
+      )
+      VALUES (
+        ${createHash("sha256").update(key).digest("hex")},
+        ${new Date(windowStartedAtMs)},
+        1,
+        ${new Date(now)}
+      )
+      ON CONFLICT (key) DO UPDATE SET
+        window_started_at = EXCLUDED.window_started_at,
+        request_count = CASE
+          WHEN login_rate_limit_buckets.window_started_at = EXCLUDED.window_started_at
+            THEN LEAST(login_rate_limit_buckets.request_count + 1, 2147483647)
+          ELSE 1
+        END,
+        updated_at = EXCLUDED.updated_at
+      RETURNING request_count
+    `;
+    const count = rows[0]?.request_count;
+    if (count === undefined) {
+      throw new Error("Login rate limit bucket update returned no result.");
+    }
+
+    const allowed = count <= maximumRequests;
+    return {
+      allowed,
+      retryAfterSeconds: allowed
+        ? 0
+        : Math.max(1, Math.ceil((windowStartedAtMs + windowMs - now) / 1_000)),
+    };
+  }
+}
+
 export interface SessionRecord {
   sessionId: string;
   csrfToken: string;
@@ -646,7 +698,11 @@ export function createAuthBoundaryDependencies(
     (options.prisma === undefined
       ? new InMemoryOAuthTransactionStore()
       : new PrismaOAuthTransactionStore(options.prisma));
-  const loginRateLimiter = options.loginRateLimiter ?? new InMemoryLoginRateLimiter();
+  const loginRateLimiter =
+    options.loginRateLimiter ??
+    (options.prisma === undefined
+      ? new InMemoryLoginRateLimiter()
+      : new PrismaLoginRateLimiter(options.prisma));
 
   if (
     options.production === true &&

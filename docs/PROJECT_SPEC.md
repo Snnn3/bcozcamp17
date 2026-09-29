@@ -229,6 +229,14 @@ Rules:
 
 ## 8. Architecture and repository structure
 
+### Initial deployment and migration target
+
+Initially, Cloudflare Pages hosts the responsive web apps, Supabase Auth provides Google login, Supabase Edge Functions implement the API, and Supabase PostgreSQL stores application data. The browser calls Edge Functions only; it must not call PostgREST/Data APIs or PostgreSQL directly. Browser roles cannot read or write application tables. Enable RLS with no browser policies, and expose business operations only through authorization-checked Edge Functions. Edge Functions derive the Supabase user ID from a verified access token, resolve the permanent application user ID through `supabase_auth_identity_mappings`, and load current roles and permissions from application tables.
+
+The migration target is the Fastify modular monolith and PostgreSQL schema on a VPS. During the API/database cutover, Supabase Auth remains active and Fastify temporarily accepts only asymmetric RS256 Supabase access tokens, validates issuer, audience, signature, and expiry, resolves the Supabase subject through the same mapping, and reloads local permissions. A later cutover moves Google login to Fastify's server-managed sessions. Never use Supabase Auth UUIDs as application record IDs or trust IDs, roles, or editable metadata from browser claims. See `docs/SUPABASE_TO_VPS_MIGRATION.md` for the sequence.
+
+In both phases, browsers access private object storage only through narrowly scoped, short-lived upload/download URLs issued by the authoritative API.
+
 Use a TypeScript/Node.js monorepo with a modular-monolith API. Web applications never connect to PostgreSQL. They access private object storage only through narrowly scoped, short-lived upload/download URLs issued by the API.
 
 ```text
@@ -275,6 +283,8 @@ router -> authentication/policy -> service -> repository -> database/external ad
 Keep business rules in the API service layer, not only in React components or route handlers.
 
 ## 9. Technology stack
+
+The API, database, and authentication rows below describe the post-migration Fastify target. The initial production stack is Supabase Edge Functions, Supabase PostgreSQL, Supabase Auth with Google, and private Cloudflare R2. Keep the browser-to-API and app-owned identity contracts the same across both phases.
 
 | Layer | Choice | Notes |
 |---|---|---|
@@ -727,6 +737,10 @@ Launch requires closed decisions for the relevant slice, passed EC tests, actual
 No finite specification proves coverage of every possible edge case. Add each discovered incident or ambiguity to this table and its test before closing it.
 
 ## 19. Authentication: Google login (confirmed)
+
+Authentication is phased. Initially, Supabase Auth handles Google sign-in and issues access tokens to the browser; the browser sends them only to Supabase Edge Functions. Edge Functions must validate the token through Supabase Auth, resolve its Supabase UUID to the permanent `users.id` through `supabase_auth_identity_mappings`, and load roles and permissions from application tables. The Supabase JWT `role=authenticated` claim grants no camp role or permission. Do not use browser `user_metadata` or email matching to assign an application identity. This repository's Fastify bridge is for the later API/database cutover only; it accepts RS256 asymmetric Supabase tokens and fails closed for legacy HS256 tokens.
+
+The remaining subsections specify the final Fastify Google OpenID Connect flow after Supabase Auth is retired.
 
 ### Identity and access
 

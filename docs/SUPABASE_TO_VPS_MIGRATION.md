@@ -4,6 +4,14 @@
 
 This document describes how to move the production application from the initial Supabase Free setup to a VPS without moving the frontend or uploaded documents unnecessarily.
 
+**Repository readiness:** this repository now defines and tests the temporary
+Fastify identity-verification boundary, but it still does not contain a
+deployable Supabase project, Edge Functions, application business routes, or a
+trusted Supabase-to-app-user provisioning workflow. The identity-check route
+does not itself protect business operations. Backup/restore automation and a
+200-user load scenario also remain release gates; this runbook is not evidence
+that a live migration or restore has succeeded.
+
 > **Specification alignment:** The current project contracts target a Fastify API, Google OpenID Connect, and server-managed sessions. A Supabase-first launch is a temporary architecture choice from the deployment discussion. Before implementing that launch, update the affected normative contracts (at minimum `docs/PROJECT_SPEC.md` and `docs/API_SPEC.md`) so they describe the chosen initial architecture and migration boundary. This migration note does not override those contracts by itself.
 
 ### Starting architecture
@@ -14,6 +22,7 @@ This document describes how to move the production application from the initial 
 - **Database:** Supabase-managed PostgreSQL.
 - **Documents:** private Cloudflare R2 bucket, accessed through short-lived signed URLs.
 - **Database backups:** scheduled, encrypted database exports stored separately in R2.
+- **API boundary:** Supabase Edge Functions only. Browser clients do not call PostgREST/Data APIs for application tables; enforce server-side permissions and default-deny database access.
 
 ### Target architecture
 
@@ -51,6 +60,21 @@ Keep these boundaries in place from the first release so the later migration has
 - Keep database schema changes in versioned migrations. Document which policies, functions, triggers, and constraints are required by the application.
 - Keep a scheduled database export and periodically verify that it can be restored. A backup that has not been restored in a test is not sufficient migration evidence.
 
+### Supabase token-signing prerequisite
+
+The temporary Fastify bridge in this repository accepts **RS256 asymmetric
+signing keys only**. It obtains the project's public keys from
+`<SUPABASE_URL>/auth/v1/.well-known/jwks.json`, then verifies the exact issuer
+`<SUPABASE_URL>/auth/v1`, audience `authenticated`, role `authenticated`,
+expiry, UUID subject, and signature. It rejects legacy HS256 tokens, service
+role tokens, unknown signing algorithms, and unmapped users. Before the first
+API/database cutover, configure the Supabase project to sign access tokens with
+an RS256 asymmetric key and confirm new test tokens use that key. Tokens issued
+under a legacy HMAC key are not discoverable through JWKS; do not enable the
+bridge until the project is on the supported signing mode and old tokens have
+expired or users have signed in again. Never configure a Supabase service-role
+key in the browser or use one as a user's bearer token.
+
 ## Recommended Migration: Two Cutovers
 
 Separating the API/database move from the authentication move reduces the number of changes made at once. During the first cutover, Supabase Auth remains in use temporarily; the final cutover removes that dependency.
@@ -61,7 +85,7 @@ Separating the API/database move from the authentication move reduces the number
 2. Deploy the application schema from the project's versioned Prisma migrations. For a plain PostgreSQL + Fastify target, do not blindly restore Supabase-managed `auth`, `storage`, or other platform schemas.
 3. Port each required Edge Function to a Fastify route. Move authorization and business rules into the server's policy and service layers, and preserve the relevant database constraints and transaction behavior.
 4. Implement R2 signing in the Fastify API. Keep the same bucket and object-key convention so existing documents remain reachable.
-5. Temporarily keep Supabase Auth as the identity provider. Configure Fastify to verify Supabase-issued access tokens using the expected issuer and signing keys, then resolve the token subject to the application-owned user ID through the mapping described above. Do not trust unverified client-supplied user IDs, roles, or editable user metadata.
+5. Temporarily keep Supabase Auth as the identity provider. Set `SUPABASE_URL` on Fastify, enable the RS256 JWKS verifier, and resolve verified token subjects to application-owned user IDs through the mapping described above. Do not trust unverified client-supplied user IDs, roles, or editable user metadata. The verifier is not compatible with legacy HS256 projects.
 
 ### Phase 1: Dry-run the database and API migration
 
@@ -79,7 +103,7 @@ Supabase's platform restore guide targets a self-hosted Supabase instance. It no
 1. Announce a short maintenance window and temporarily disable application writes.
 2. Create a final export from Supabase and restore it to the production VPS database.
 3. Verify row counts, required constraints, user-to-application mappings, permissions, and file references before accepting writes.
-4. Point the Cloudflare Pages application to the Fastify API on the VPS. Keep Google sign-in routed through Supabase Auth for this transition.
+4. Point the Cloudflare Pages application to the Fastify API on the VPS, configure its temporary Supabase bearer-token mode, and keep Google sign-in routed through Supabase Auth for this transition.
 5. Run smoke checks for sign-in, application submission, staff review, and private R2 uploads/downloads. Re-enable writes only after the checks pass.
 6. Keep the old Supabase database unchanged and read-only for an agreed rollback period. Before the VPS accepts new writes, rollback can point traffic back to Supabase. After the VPS accepts writes, rollback also requires a plan to preserve or replay those new writes; changing DNS alone would lose them.
 
@@ -98,6 +122,7 @@ Proceed with the production cutover only when all of the following are true:
 
 - The latest database export has been restored successfully to the target PostgreSQL version.
 - Row counts, important relationships, application user mappings, and R2 object references have been verified.
+- Fastify accepts only mapped RS256 Supabase Auth users with current local account status and permissions; legacy HS256 and service-role tokens are rejected.
 - The Fastify API passes the relevant unit and integration checks, including permission denials and private-data protections.
 - The VPS passes the 200-concurrent-user acceptance test in `docs/PROJECT_SPEC.md` section 15.
 - Backup creation and restore have both been demonstrated.

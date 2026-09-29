@@ -337,7 +337,30 @@ Sprint 1 gates include initial uploads, retries, privacy/ownership, audit, deadl
 
 Use deterministic provider fixtures to test failures/claims and isolated storage for sessions. Run separate real-Google smoke tests with dedicated test accounts against each environment's configured callback and audience before launch; do not automate Google's password/MFA UI or use real applicant accounts. Auth library route mapping, session policy, and Google Cloud production configuration are required evidence, not assumed complete from these specifications.
 
-## 12. Contract approval evidence
+## 12. Supabase temporary-auth bridge tests
+
+These acceptance cases apply to the temporary Fastify bridge while Supabase
+Auth remains the identity provider. Supabase signs tokens with the configured
+RS256 asymmetric key. They do not claim that a live Supabase project has been
+configured or tested.
+
+| ID | Scenario | Expected result |
+|---|---|---|
+| SUPA-01 | Valid RS256 token from configured project | Issuer, audience `authenticated`, role `authenticated`, signature, expiry, and UUID subject validate; response contains the mapped app user only |
+| SUPA-02 | Tampered signature, wrong issuer/audience, expired/not-yet-valid token, malformed UUID subject, unknown `kid`, or unsupported algorithm | Request is denied with a safe `401`; no user is provisioned and no client claims are returned |
+| SUPA-03 | Legacy HS256 or Supabase `service_role` token | Request is denied; HMAC secrets and service-role credentials are never accepted as applicant/staff credentials |
+| SUPA-04 | Valid token subject without a unique trusted mapping | Request is denied; no account is created and email or editable metadata is not used to link an account |
+| SUPA-05 | Mapped account is disabled, or its local permissions change after token issuance | Disabled account is denied; active account receives only current database roles and permissions |
+| SUPA-06 | JWKS endpoint is unavailable or returns an invalid key set | Request fails closed with safe `503 DEPENDENCY_UNAVAILABLE`; token/key details do not enter logs or response |
+| SUPA-07 | Concurrent attempts to create a Supabase mapping for one auth UUID or one app user | Unique constraints allow at most one mapping; conflicting identities fail for operator resolution |
+| SUPA-08 | Supabase JWT contains client-edited user metadata, app user ID, role, or permission fields | None of those values affect identity or authorization; only verified `sub`, the mapping, and live local permission tables are used |
+
+Use generated RSA test keys and synthetic identities. Add an isolated PostgreSQL
+integration test for mapping uniqueness and permission lookup. Before cutover,
+run a separate live smoke test against the configured Supabase project's RS256
+JWKS endpoint using dedicated synthetic accounts.
+
+## 13. Contract approval evidence
 
 Before closing Issue #8, record the contract commit and result for each shared
 boundary. At minimum the evidence must identify:

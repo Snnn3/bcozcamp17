@@ -1,8 +1,10 @@
 import Fastify from "fastify";
 import { describe, expect, it } from "vitest";
+import type { PrismaClient } from "@bcoz/db";
 import { buildServer } from "../../apps/server/src/app";
 import {
   createAuthBoundaryDependencies,
+  PrismaLoginRateLimiter,
   registerAuthRoutes,
   InMemoryUserDirectory,
   InMemorySessionStore,
@@ -193,6 +195,25 @@ describe("server authentication boundary", () => {
     expect(() => createAuthBoundaryDependencies({ production: true })).toThrow(
       "Production authentication requires durable database adapters.",
     );
+  });
+
+  it("selects the shared Prisma login limiter for production authentication", () => {
+    const prisma = { $queryRaw: async () => [] } as unknown as PrismaClient;
+
+    const dependencies = createAuthBoundaryDependencies({ prisma, production: true });
+
+    expect(dependencies.loginRateLimiter).toBeInstanceOf(PrismaLoginRateLimiter);
+  });
+
+  it("returns a retry window from the shared Prisma login limiter", async () => {
+    const prisma = {
+      $queryRaw: async () => [{ request_count: 3 }],
+    } as unknown as PrismaClient;
+    const limiter = new PrismaLoginRateLimiter(prisma);
+
+    const result = await limiter.consume("start:203.0.113.42", 123_456, 2, 60_000);
+
+    expect(result).toEqual({ allowed: false, retryAfterSeconds: 57 });
   });
 
   it("requires the session CSRF token before revoking logout state", async () => {

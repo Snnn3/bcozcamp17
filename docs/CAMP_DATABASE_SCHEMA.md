@@ -43,6 +43,7 @@ There is no Leader role.
 - Foreign keys for concrete relationships; polymorphic audit/result references require explicit service integrity checks
 - Private object storage for uploaded files; file contents are not stored in PostgreSQL
 - Google provider-account tokens are not stored in this schema. The application-owned local session and browser-bound OAuth transaction tables are included below and are managed by Prisma migrations.
+- During the Supabase-first phase, the Supabase Auth UUID is stored in a separate one-to-one mapping to the permanent application `users.id`; the mapping is created only by a trusted provisioning process from a verified Google identity. Supabase access tokens and provider tokens are not stored.
 - Repeating and multi-value business data uses child or junction tables, not comma-separated values or JSONB
 - Previous document versions and review decisions are retained
 - camp_settings contains exactly one row, enforced by the seed/migration and application startup check
@@ -69,6 +70,7 @@ erDiagram
     USERS ||--o| PARTICIPANT_PROFILES : owns
     USERS ||--o{ USER_ROLES : has
     USERS ||--o{ AUTH_SESSIONS : owns
+    USERS ||--o| SUPABASE_AUTH_IDENTITY_MAPPINGS : maps
     ROLES ||--o{ USER_ROLES : assigns
     ROLES ||--o{ ROLE_PERMISSIONS : grants
     PERMISSIONS ||--o{ ROLE_PERMISSIONS : contains
@@ -217,6 +219,41 @@ provider access or refresh tokens are not persisted.
 | expires_at | timestamptz | Required; default transaction lifetime 10 minutes |
 
 An expired or consumed transaction cannot be reused.
+
+### supabase_auth_identity_mappings
+
+Temporary portability mapping used while Supabase Auth remains the identity
+provider. `supabase_user_id` is accepted only from a signature-verified access
+token; `user_id` points to the permanent application user. A trusted
+server-side provisioning process must create the row after verifying the
+Google identity and resolving its immutable Google `sub` to `users.id`. Never
+create or change this mapping from browser-supplied IDs, roles, user metadata,
+or email matching. The pair is one-to-one and the table has RLS enabled with no
+client policies; only trusted server credentials may access it.
+
+| Column | Type | Rules |
+|---|---|---|
+| supabase_user_id | uuid | Primary key; verified Supabase Auth subject |
+| user_id | uuid | Required unique FK to users; permanent app identity |
+| created_at | timestamptz | Required |
+
+The mapping is deleted with its application user. After Supabase Auth is
+retired, retain or remove mapping rows according to the approved retention
+policy; they are not user IDs for application records.
+
+### login_rate_limit_buckets
+
+Shared fixed-window login-rate-limit state for Fastify instances. The key is a
+SHA-256 digest of a namespaced client key; raw client IP values are not stored.
+The row is updated atomically in PostgreSQL so concurrent API instances share
+one limit. This table has no browser access and is not part of applicant data.
+
+| Column | Type | Rules |
+|---|---|---|
+| key | varchar(64) | Primary key; SHA-256 hex digest |
+| window_started_at | timestamptz | Required UTC fixed-window start |
+| request_count | integer | Required positive count |
+| updated_at | timestamptz | Required |
 
 ### roles
 
