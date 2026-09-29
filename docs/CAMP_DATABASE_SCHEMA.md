@@ -255,6 +255,15 @@ one limit. This table has no browser access and is not part of applicant data.
 | request_count | integer | Required positive count |
 | updated_at | timestamptz | Required |
 
+Index `window_started_at` for bounded cleanup. Fastify deletes rows from earlier
+fixed windows when traffic first reaches a new window in each process. With the
+current one-minute login window, bucket rows are retained only through their
+active minute and the first request in a later minute removes expired rows.
+Cleanup is performed before the shared atomic upsert; if cleanup fails, the
+limiter fails closed and the request receives a dependency-unavailable response.
+The runtime application database role must have `DELETE` permission on this
+table for that cleanup to run.
+
 ### roles
 
 Stores the three supported roles.

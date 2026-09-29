@@ -138,6 +138,10 @@ Table login_rate_limit_buckets {
   window_started_at timestamptz [not null]
   request_count int [not null, note: 'Positive fixed-window count, atomically incremented']
   updated_at timestamptz [not null]
+
+  indexes {
+    (window_started_at)
+  }
 }
 
 Table roles {

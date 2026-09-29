@@ -63,6 +63,36 @@ describe("Supabase temporary bearer authentication", () => {
     await expect(verifier.verify(createToken())).resolves.toEqual({ subject: SUPABASE_USER_ID });
   });
 
+  it("coalesces simultaneous JWKS requests while the cache is empty", async () => {
+    let resolveJwks: (response: Response) => void = () => undefined;
+    const jwksResponse = new Promise<Response>((resolve) => {
+      resolveJwks = resolve;
+    });
+    let fetchCount = 0;
+    const verifier = new SupabaseAccessTokenVerifier({
+      supabaseUrl: "https://project.supabase.co",
+      now: () => NOW,
+      fetcher: async () => {
+        fetchCount += 1;
+        return jwksResponse;
+      },
+    });
+    const tokenCount = 8;
+    const verifications = Array.from({ length: tokenCount }, () => verifier.verify(createToken()));
+
+    expect(fetchCount).toBe(1);
+    resolveJwks(
+      new Response(JSON.stringify({ keys: [publicJwk] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    await expect(Promise.all(verifications)).resolves.toEqual(
+      Array.from({ length: tokenCount }, () => ({ subject: SUPABASE_USER_ID })),
+    );
+  });
+
   it.each([
     ["a mismatched issuer", { iss: "https://other.supabase.co/auth/v1" }],
     ["a mismatched audience", { aud: "service_role" }],

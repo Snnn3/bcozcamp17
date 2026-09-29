@@ -12,7 +12,7 @@ does not itself protect business operations. Backup/restore automation and a
 200-user load scenario also remain release gates; this runbook is not evidence
 that a live migration or restore has succeeded.
 
-> **Specification alignment:** The current project contracts target a Fastify API, Google OpenID Connect, and server-managed sessions. A Supabase-first launch is a temporary architecture choice from the deployment discussion. Before implementing that launch, update the affected normative contracts (at minimum `docs/PROJECT_SPEC.md` and `docs/API_SPEC.md`) so they describe the chosen initial architecture and migration boundary. This migration note does not override those contracts by itself.
+> **Specification alignment:** `docs/PROJECT_SPEC.md`, `docs/API_SPEC.md`, and the database contracts now define the temporary Supabase-first architecture and the later Fastify/session target. This runbook describes operational sequencing; the normative contracts remain authoritative for product behavior, API shape, identity mapping, and persistence.
 
 ### Starting architecture
 

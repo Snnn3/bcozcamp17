@@ -66,6 +66,7 @@ export class SupabaseAccessTokenVerifier implements SupabaseAccessTokenVerifierP
   private readonly now: () => number;
   private readonly fetcher: typeof fetch;
   private cachedJwks: CachedJwks | undefined;
+  private jwksRefreshInFlight: Promise<CachedJwks> | undefined;
   private lastJwksRefreshAttemptAt = 0;
 
   public constructor(options: SupabaseAccessTokenVerifierOptions) {
@@ -154,6 +155,11 @@ export class SupabaseAccessTokenVerifier implements SupabaseAccessTokenVerifierP
       }
     }
 
+    if (this.jwksRefreshInFlight !== undefined) {
+      const jwks = await this.jwksRefreshInFlight;
+      return jwks.keys.find((key) => key.kid === keyId) ?? null;
+    }
+
     if (
       this.lastJwksRefreshAttemptAt > 0 &&
       now - this.lastJwksRefreshAttemptAt < JWKS_REFRESH_COOLDOWN_MS
@@ -165,9 +171,16 @@ export class SupabaseAccessTokenVerifier implements SupabaseAccessTokenVerifierP
     }
 
     this.lastJwksRefreshAttemptAt = now;
-    const jwks = await this.fetchJwks();
-    const key = jwks.keys.find((candidate) => candidate.kid === keyId);
-    return key ?? null;
+    const refresh = this.fetchJwks();
+    this.jwksRefreshInFlight = refresh;
+    try {
+      const jwks = await refresh;
+      return jwks.keys.find((candidate) => candidate.kid === keyId) ?? null;
+    } finally {
+      if (this.jwksRefreshInFlight === refresh) {
+        this.jwksRefreshInFlight = undefined;
+      }
+    }
   }
 
   private async fetchJwks(): Promise<CachedJwks> {

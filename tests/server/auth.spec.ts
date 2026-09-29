@@ -207,6 +207,7 @@ describe("server authentication boundary", () => {
 
   it("returns a retry window from the shared Prisma login limiter", async () => {
     const prisma = {
+      $executeRaw: async () => 0,
       $queryRaw: async () => [{ request_count: 3 }],
     } as unknown as PrismaClient;
     const limiter = new PrismaLoginRateLimiter(prisma);

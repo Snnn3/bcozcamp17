@@ -61,6 +61,8 @@ export class InMemoryLoginRateLimiter implements LoginRateLimiter {
 }
 
 export class PrismaLoginRateLimiter implements LoginRateLimiter {
+  private lastPrunedWindowStartMs: number | undefined;
+
   public constructor(private readonly prisma: PrismaClient) {}
 
   public async consume(
@@ -74,6 +76,7 @@ export class PrismaLoginRateLimiter implements LoginRateLimiter {
     }
 
     const windowStartedAtMs = Math.floor(now / windowMs) * windowMs;
+    await this.pruneExpiredBuckets(windowStartedAtMs);
     const rows = await this.prisma.$queryRaw<Array<{ request_count: number }>>`
       INSERT INTO login_rate_limit_buckets (
         key,
@@ -109,6 +112,25 @@ export class PrismaLoginRateLimiter implements LoginRateLimiter {
         ? 0
         : Math.max(1, Math.ceil((windowStartedAtMs + windowMs - now) / 1_000)),
     };
+  }
+
+  private async pruneExpiredBuckets(windowStartedAtMs: number): Promise<void> {
+    if (this.lastPrunedWindowStartMs === windowStartedAtMs) {
+      return;
+    }
+
+    this.lastPrunedWindowStartMs = windowStartedAtMs;
+    try {
+      await this.prisma.$executeRaw`
+        DELETE FROM login_rate_limit_buckets
+        WHERE window_started_at < ${new Date(windowStartedAtMs)}
+      `;
+    } catch (error: unknown) {
+      if (this.lastPrunedWindowStartMs === windowStartedAtMs) {
+        this.lastPrunedWindowStartMs = undefined;
+      }
+      throw error;
+    }
   }
 }
 
