@@ -138,6 +138,7 @@ describe("environment setup", () => {
       parseEnvironment({
         ...process.env,
         NODE_ENV: "production",
+        AUTH_PHASE: "fastify",
         STORAGE_FORCE_PATH_STYLE: "true",
         WEB_ORIGINS: "https://app.example.test",
       }),
@@ -146,16 +147,40 @@ describe("environment setup", () => {
       parseEnvironment({
         ...process.env,
         NODE_ENV: "production",
+        AUTH_PHASE: "fastify",
         STORAGE_FORCE_PATH_STYLE: "false",
         WEB_ORIGINS: "http://app.example.test",
       }),
     ).toThrow("WEB_ORIGINS must use HTTPS");
   });
 
+  it("requires an explicit authentication phase in production", () => {
+    const productionInput: NodeJS.ProcessEnv = {
+      ...process.env,
+      NODE_ENV: "production",
+      WEB_ORIGINS: "https://app.example.test",
+      DATABASE_URL: "postgresql://user:password@db.example.test:5432/bcoz",
+      SESSION_SECRET: "a-production-session-secret-value",
+      STORAGE_ENDPOINT: "https://storage.example.test",
+      STORAGE_ACCESS_KEY_ID: "production-access",
+      STORAGE_SECRET_ACCESS_KEY: "production-secret",
+      STORAGE_FORCE_PATH_STYLE: "false",
+      GOOGLE_CLIENT_ID: "production-client",
+      GOOGLE_CLIENT_SECRET: "production-secret",
+      GOOGLE_REDIRECT_URI: "https://api.example.test/auth/google/callback",
+    };
+    delete productionInput.AUTH_PHASE;
+
+    expect(() => parseEnvironment(productionInput)).toThrow(
+      "Production AUTH_PHASE must be explicitly configured.",
+    );
+  });
+
   it("rejects omitted production origins instead of inheriting localhost defaults", () => {
     const productionInput: NodeJS.ProcessEnv = {
       ...process.env,
       NODE_ENV: "production",
+      AUTH_PHASE: "fastify",
       DATABASE_URL: "postgresql://user:password@db.example.test:5432/bcoz",
       SESSION_SECRET: "a-production-session-secret-value",
       STORAGE_ENDPOINT: "https://storage.example.test",

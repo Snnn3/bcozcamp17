@@ -130,6 +130,9 @@ export function parseEnvironment(input: NodeJS.ProcessEnv = process.env): Enviro
   }
 
   if (environment.nodeEnv === "production") {
+    if (input.AUTH_PHASE === undefined) {
+      throw new Error("Production AUTH_PHASE must be explicitly configured.");
+    }
     if (input.WEB_ORIGINS === undefined) {
       throw new Error("Production WEB_ORIGINS must be explicitly configured.");
     }

@@ -62,6 +62,11 @@ Keep these boundaries in place from the first release so the later migration has
 
 ### Supabase token-signing prerequisite
 
+For development and test, the configuration parser defaults to `fastify` so
+the repository can run its local Google OIDC fixtures without a Supabase
+project. Production has no implicit phase: `AUTH_PHASE` must be explicitly
+configured, and production should use `supabase` until the final cutover.
+
 Set `AUTH_PHASE=supabase` while Supabase Auth remains the identity provider and
 the temporary Fastify bridge is enabled. Set `AUTH_PHASE=fastify` only after the
 final Fastify OIDC cutover. The server registers Google login routes only in the
